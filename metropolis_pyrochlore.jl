@@ -101,8 +101,6 @@ function local_field_pyro(spins, H_bond, h, n, N)
     sublattice = div(n-1, N^3)
     neighbours = neighbours_pyro(n, N)
     
-    #aye = m -> H_bond[sublattice+1, div(m-1, N^3)+1,:,:] * spins[:,m]
-    #h_loc = map(aye, neighbours)
     h_loc = zeros(3)
     for m in neighbours
         h_loc += H_bond[sublattice+1, div(m-1, N^3)+1,:,:] * spins[:,m]
@@ -149,12 +147,12 @@ end
 
 #intializes a random spin configuration with shape 3 x 4N^3
 function spins_initial_pyro(N, S)
-    Spins = rand(3, 4*N^3)
+    spins = rand(3, 4*N^3)
     for j=1:4*N^3
-        Spins[:,j] *= S/norm(Spins[:,j]) #normalizes each spin
-        #Spins[j,:] = [0,0,1]
+        spins[:,j] *= S/norm(spins[:,j]) #normalizes each spin
+        #spins[j,:] = [0,0,1]
     end
-    return Spins
+    return spins
 end
 
 #picks a point on the unit sphere uniformly and returns Cartesian coordinates (Sx,Sy,Sz)
@@ -171,7 +169,7 @@ function metro_pyro!(spins, S, H_bond, h, N, T, deterministic=false)
     N_sites = 4*N^3
     for site in 1:N_sites #do this once for every site
         i = rand(1:N_sites)        
-        old_spin = spins[:,i] #copy previous configuration 
+        old_spin = copy(spins[:,i]) #copy previous configuration 
 
         if deterministic #deterministic update
             h_loc = local_field_pyro(spins, H_bond, h, i, N)
@@ -188,8 +186,6 @@ function metro_pyro!(spins, S, H_bond, h, N, T, deterministic=false)
             spins[:,i] = old_spin # if not accepted, revert to old spin
         end
     end
-    
-    return spins
 end
 
 #overrelaxation (microcanonical sweep) which reflects each spin about the local field
@@ -201,8 +197,6 @@ function overrelax_pyro!(spins, H_bond, h, N)
         S_i = spins[:, site]
         spins[:, site] = -S_i + 2* (S_i' * h_loc)/norm(h_loc)^2 * h_loc
     end
-
-    return spins
 end
 
 #number of thermalization sweeps, deterministic sweeps, overrelax:metropolis rate
@@ -226,12 +220,12 @@ function sim_anneal(N_therm, N_det, overrelax_rate, T_i, T_f, Js, h, N, S, spins
         T = max(anneal_schedule(sweep, N_therm, T_i, T_f), T_f) #stop changing T after N_therm sweeps
         if sweep > N_therm #switch to deterministic sweeps after N_therm sweeps
             det = true
-            spins = metro_pyro!(spins, S, H_bond, h, N, T, det)
+            metro_pyro!(spins, S, H_bond, h, N, T, det)
         else #otherwise, do overrelaxation and metropolis with relative frequency overrelax_rate
             if sweep % overrelax_rate == 0
-                spins = metro_pyro!(spins, S, H_bond, h, N, T, det)
+                metro_pyro!(spins, S, H_bond, h, N, T, det)
             else
-                spins = overrelax_pyro!(spins, H_bond, h, N)
+                overrelax_pyro!(spins, H_bond, h, N)
             end
         end
             
@@ -271,14 +265,17 @@ function parallel_temper(rank, replica_exchange_rate, N_therm, N_det, probe_rate
             measurements[meas_ind, :, 4] = sum(spins[:,(3*N^3+1):(4*N^3)], dims=2)[:,1]
         end
         
-        #do overrelaxation and metropolis with relative frequency overrelax_rate
-        #no deterministic updates because that messes up the higher temperature ranks?
-        if sweep % overrelax_rate == 0
-            spins = metro_pyro!(spins, S, H_bond, h, N, T, det)
-        else
-            spins = overrelax_pyro!(spins, H_bond, h, N)
+        #only do deterministic updates on lowest temperature rank (after thermalization)
+        if rank == 0 && sweep > N_therm
+            det = true 
+            metro_pyro!(spins, S, H_bond, h, N, T, det)
+        else #do overrelaxation and metropolis with relative frequency overrelax_rate
+            if sweep % overrelax_rate == 0
+                metro_pyro!(spins, S, H_bond, h, N, T, det)
+            else
+                overrelax_pyro!(spins, H_bond, h, N)
+            end
         end
-        
         energies[sweep] = E_pyro(spins, H_bond, h, N)
 
         if sweep % replica_exchange_rate == 0
