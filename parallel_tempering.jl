@@ -22,7 +22,7 @@ Ts = exp10.(range(log10(T_min), stop=log10(T_max), length=comm_size))
 #initial spin configuration (optional)
 #spins = spins_initial_pyro(N) 
 
-spins_r, energies_r, meas_r, accept_r = parallel_temper(r, replica_exchange_rate, N_therm, N_det, probe_rate, overrelax_rate, Ts, Js, h, N, S)
+spins_r, energies_r, meas_r, err_r, accept_r = parallel_temper(r, replica_exchange_rate, N_therm, N_det, probe_rate, overrelax_rate, Ts, Js, h, N, S)
 
 #swap_rate = 2*replica_exchange_rate*accept_r/(N_therm+N_det)
 print("rank: ", r, " swapped ", sum(accept_r), " times.")
@@ -31,8 +31,12 @@ print("rank: ", r, " swapped ", sum(accept_r), " times.")
 #gather_meas = MPI.Gather(meas_r, comm, root=0)
 
 #writes measurements to a file
+
 obs_path = replace(pwd(),"\\"=>"/")*"/pt_out/obs_h$(h_index)_$(r).h5"
-write_observables(obs_path, Dict("avg_spin"=>meas_r, "energy_per_site"=>energies_r[end]))
+write_observables(obs_path, Dict("avg_spin"=>meas_r, "avg_spin_err"=>err_r, "energy_per_site"=>energies_r[end]))
+
+
+#todo: replace energies_r[end] with an average and get the error too
 
 if r == 0
     #=
@@ -48,5 +52,4 @@ if r == 0
     params_path = replace(pwd(),"\\"=>"/")*"/pt_out/params_h$(h_index).h5"
     write_params(params_path, params)
 end
-
 

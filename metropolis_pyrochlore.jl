@@ -1,4 +1,6 @@
-using LinearAlgebra
+using LinearAlgebra, BinningAnalysis
+
+include("observables.jl")
 
 #local z axis on sublattice m in in column m+1
 z_local = 1/sqrt(3)*[1 1 1; 1 -1 -1; -1 1 -1; -1 -1 1]' 
@@ -124,7 +126,6 @@ function E_pyro(spins, H_bond, h, N)
         end
 
         #zeeman contribution
-        sublattice = div(n-1, N^3)
         E += -(h' * z_local[:, sublattice+1])*(spins[:,n]' * [0,0,1]) 
     end
     
@@ -165,26 +166,32 @@ function sphere_pick(S)
 end
 
 #metropolis algorithm with deterministic updates (aligning spins to their local field)
-function metro_pyro!(spins, S, H_bond, h, N, T, deterministic=false)
+function metropolis!(spins, S, H_bond, h, N, T)
     N_sites = 4*N^3
+    
     for site in 1:N_sites #do this once for every site
         i = rand(1:N_sites)        
         old_spin = copy(spins[:,i]) #copy previous configuration 
+        spins[:,i] = sphere_pick(S)
 
-        if deterministic #deterministic update
-            h_loc = local_field_pyro(spins, H_bond, h, i, N)
-            spins[:,i] = S*h_loc/norm(h_loc)
-        else #pick random orientation
-            spins[:,i] = sphere_pick(S)
-        end
-        
-        #could be optimized by precomputing the neighbour indices and only passing in the neighbour spins rather than the entire spin matrix?
         delta_E = energy_difference_pyro(spins, old_spin, H_bond, h, i, N) 
-        
-        #if delta_E > 0 && rand() > exp(-delta_E/T) 
+    
         if rand() > exp(-delta_E/T) #accept if energy is lower (delta E < 0) or with probability given by Boltzmann weight
             spins[:,i] = old_spin # if not accepted, revert to old spin
         end
+    end 
+end
+
+function det_update!(spins, S, H_bond, h, N)
+    N_sites = 4*N^3
+    
+    #can modify spins on the spot or use a copy for h_local 
+    #don't know which one is right
+
+    #spins_copy = copy(spins)
+    for i in 1:N_sites
+        h_loc = local_field_pyro(spins, H_bond, h, i, N)
+        spins[:,i] = -S*h_loc/norm(h_loc)
     end
 end
 
@@ -202,7 +209,7 @@ end
 #number of thermalization sweeps, deterministic sweeps, overrelax:metropolis rate
 #initial temperature, target temperature, number of unit cells in each direction
 #Js = (J_zz, J_pm, J_pmpm, J_zpm), external magnetic field vector, initial spin configuration
-function sim_anneal(N_therm, N_det, overrelax_rate, T_i, T_f, Js, h, N, S, spins=[])
+function sim_anneal(N_therm, N_det, probe_rate, overrelax_rate, T_i, T_f, Js, h, N, S, spins=[])
     #can set initial spin configuration, generate randomly if not
     if length(spins) != 4*N^3
         spins = spins_initial_pyro(N, S)
@@ -211,19 +218,27 @@ function sim_anneal(N_therm, N_det, overrelax_rate, T_i, T_f, Js, h, N, S, spins
     H_bond = H_matrix_all(Js)
 
     N_sweeps = N_therm + N_det
+    measurements = Any[]
     energies = zeros(N_sweeps)
+    avg_spin = zeros(div(N_det,probe_rate), 3, 4)
     
-    det = false #whether to do deterministic updates
     T = T_i #temperature
 
     for sweep in 1:N_sweeps
         T = max(anneal_schedule(sweep, N_therm, T_i, T_f), T_f) #stop changing T after N_therm sweeps
         if sweep > N_therm #switch to deterministic sweeps after N_therm sweeps
-            det = true
-            metro_pyro!(spins, S, H_bond, h, N, T, det)
+            det_update!(spins, S, H_bond, h, N)
+
+            if sweep % probe_rate == 0
+            #take measurements after thermalization every probe_rate sweeps
+            #for magnetostriction, we just want the ensemble averaged spin for each sublattice
+            #so N_det x 3 x 4 array of results for each rank
+                meas_ind = div(sweep - N_therm, probe_rate)
+                avg_spin[meas_ind, :, :] = spin_expec(spins)
+            end
         else #otherwise, do overrelaxation and metropolis with relative frequency overrelax_rate
             if sweep % overrelax_rate == 0
-                metro_pyro!(spins, S, H_bond, h, N, T, det)
+                metropolis!(spins, S, H_bond, h, N, T)
             else
                 overrelax_pyro!(spins, H_bond, h, N)
             end
@@ -231,8 +246,14 @@ function sim_anneal(N_therm, N_det, overrelax_rate, T_i, T_f, Js, h, N, S, spins
             
         energies[sweep] = E_pyro(spins, H_bond, h, N)
     end        
-    
-    return spins, energies
+
+    #takes the sample average 
+    N_meas = div(N_det, probe_rate)
+    push!(measurements, 1/N_meas*sum(energies[N_therm+probe_rate:probe_rate:end]))
+    push!(measurements, 1/N_meas*dropdims(sum(avg_spin, dims=1), dims=1))
+
+    return spins, energies, measurements #measurements
+    #return measurements
 end
 
 #parallel tempering
@@ -268,10 +289,10 @@ function parallel_temper(rank, replica_exchange_rate, N_therm, N_det, probe_rate
         #only do deterministic updates on lowest temperature rank (after thermalization)
         if rank == 0 && sweep > N_therm
             det = true 
-            metro_pyro!(spins, S, H_bond, h, N, T, det)
+            det_update!(spins, S, H_bond, h, N)
         else #do overrelaxation and metropolis with relative frequency overrelax_rate
             if sweep % overrelax_rate == 0
-                metro_pyro!(spins, S, H_bond, h, N, T, det)
+                metropolis!(spins, S, H_bond, h, N, T)
             else
                 overrelax_pyro!(spins, H_bond, h, N)
             end
@@ -296,9 +317,18 @@ function parallel_temper(rank, replica_exchange_rate, N_therm, N_det, probe_rate
     #fname = "swaps_"*string(rank)*".txt"
     #write(fname, string(accepts))
 
-    measurements = sum(measurements, dims=1)[1,:,:]/(N_det/probe_rate)
-
-    return spins, energies, measurements/N^3, accepts
+    #computes standard error with log binning of depth L
+    #want at least 30 bins, done automatically by BinningAnalysis
+    err = zeros(3,4)
+    for comp = 1:3, subl = 1:4
+        dataset = measurements[:, comp, subl]
+        err[comp, subl] = std_error(dataset)
+    end
+    
+    #takes the sample average 
+    measurements = 1/N^3*sum(measurements, dims=1)[1,:,:]/(N_det/probe_rate)
+    
+    return spins, energies, measurements, err, accepts
 end
 
 #do this each iteration of the loop (i.e. when it's time to try swapping)
