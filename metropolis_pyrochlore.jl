@@ -99,51 +99,54 @@ function H_matrix_all(Js)
 end
 
 #h_loc at site i is dH/dS_i
-function local_field_pyro(spins, H_bond, h, n, N)
+function local_field_pyro(spins, H_bond, neighbours_n, h, n)
     sublattice = div(n-1, N^3)
-    neighbours = neighbours_pyro(n, N)
     
     h_loc = zeros(3)
-    for m in neighbours
-        h_loc += H_bond[sublattice+1, div(m-1, N^3)+1,:,:] * spins[:,m]
+    for m in neighbours_n
+        @inbounds @views h_loc += H_bond[sublattice+1, div(m-1, N^3)+1,:,:] * spins[:,m]
     end
 
     return h_loc - (h' * z_local[:, sublattice+1])*[0,0,1]
 end
 
 #energy of spin configuration with periodic boundary conditions
-function E_pyro(spins, H_bond, h, N)
+function E_pyro(spins, H_bond, neighbours, h, N)
     N_sites = 4*N^3
     E = 0
     
     for n in 1:N_sites
         #quadratic interaction, divide by 2 because each bond counted twice
         sublattice = div(n-1, N^3)
-        neighbours = neighbours_pyro(n, N)
         
-        for m in neighbours
-            E += 0.5 * spins[:,n]' * H_bond[sublattice+1, div(m-1, N^3)+1,:,:] * spins[:,m]
+        for m in neighbours[:,n]
+            @views E += 0.5 * spins[:,n]' * H_bond[sublattice+1, div(m-1, N^3)+1,:,:] * spins[:,m]
         end
 
         #zeeman contribution
-        E += -(h' * z_local[:, sublattice+1])*(spins[:,n]' * [0,0,1]) 
+        @views E += -(h' * z_local[:, sublattice+1])*(spins[:,n]' * [0,0,1]) 
     end
     
     return E/N_sites
 end
 
-function energy_difference_pyro(spins, old_spin, H_bond, h, n, N)
-    h_loc = local_field_pyro(spins, H_bond, h, n, N)
-    E_new = spins[:,n]' * h_loc
+function energy_difference_pyro(spins, old_spin, H_bond, neighbours_n, h, n)
+    h_loc = local_field_pyro(spins, H_bond, neighbours_n, h, n)
+    @views E_new = spins[:,n]' * h_loc
     E_old = old_spin' * h_loc
 
     return E_new - E_old 
 end
 
 #temperature as a function of sweep number, decreases exponentially
+#=
 function anneal_schedule(sweep, N_sweeps, T_initial, T_final)  
     a = 1/N_sweeps*log(T_final/T_initial)
     return T_initial*exp(a*sweep)
+end
+=#
+function anneal_schedule(t)
+    return 0.9^t
 end
 
 #intializes a random spin configuration with shape 3 x 4N^3
@@ -159,50 +162,51 @@ end
 #picks a point on the unit sphere uniformly and returns Cartesian coordinates (Sx,Sy,Sz)
 #then scales magnitude by S
 function sphere_pick(S) 
+    #faster rng? lehmer prng
+    #gaussian sphere picking for lower temperatures
     phi = 2*pi*rand()
     z = 2*rand() - 1
-    theta = acos(z)
-    return S*[sin(theta)*cos(phi), sin(theta)*sin(phi), z]
+    return S*[sqrt(1-z^2)*cos(phi), sqrt(1-z^2)*sin(phi), z]
 end
 
 #metropolis algorithm with deterministic updates (aligning spins to their local field)
-function metropolis!(spins, S, H_bond, h, N, T)
+function metropolis!(spins, accept_count, S, H_bond, neighbours, h, N, T)
     N_sites = 4*N^3
     
     for site in 1:N_sites #do this once for every site
         i = rand(1:N_sites)        
         old_spin = copy(spins[:,i]) #copy previous configuration 
         spins[:,i] = sphere_pick(S)
-
-        delta_E = energy_difference_pyro(spins, old_spin, H_bond, h, i, N) 
-    
-        if rand() > exp(-delta_E/T) #accept if energy is lower (delta E < 0) or with probability given by Boltzmann weight
+        
+        delta_E = energy_difference_pyro(spins, old_spin, H_bond, neighbours[:,i], h, i) 
+        
+        #accept if energy is lower (delta E < 0) or with probability given by Boltzmann weight
+        no_accept = delta_E > 0 && (rand() > exp(-delta_E/T))
+        accept_count .+= 1-no_accept
+        
+        if no_accept 
             spins[:,i] = old_spin # if not accepted, revert to old spin
         end
     end 
 end
 
-function det_update!(spins, S, H_bond, h, N)
+function det_update!(spins, S, H_bond, neighbours, h, N)
     N_sites = 4*N^3
     
-    #can modify spins on the spot or use a copy for h_local 
-    #don't know which one is right
-
-    #spins_copy = copy(spins)
-    for i in 1:N_sites
-        h_loc = local_field_pyro(spins, H_bond, h, i, N)
-        spins[:,i] = -S*h_loc/norm(h_loc)
+    for n in 1:N_sites
+        h_loc = local_field_pyro(spins, H_bond, neighbours[:,n], h, n)
+        spins[:,n] = -S*h_loc/norm(h_loc)
     end
 end
 
 #overrelaxation (microcanonical sweep) which reflects each spin about the local field
-function overrelax_pyro!(spins, H_bond, h, N)
+function overrelax_pyro!(spins, H_bond, neighbours, h, N)
     N_sites = 4*N^3
     
-    for site in 1:N_sites
-        h_loc = local_field_pyro(spins, H_bond, h, site, N)
-        S_i = spins[:, site]
-        spins[:, site] = -S_i + 2* (S_i' * h_loc)/norm(h_loc)^2 * h_loc
+    for n in 1:N_sites
+        h_loc = local_field_pyro(spins, H_bond, neighbours[:,n], h, n)
+        S_i = spins[:, n]
+        spins[:, n] = -S_i + 2* (S_i' * h_loc)/norm(h_loc)^2 * h_loc
     end
 end
 
@@ -211,49 +215,66 @@ end
 #Js = (J_zz, J_pm, J_pmpm, J_zpm), external magnetic field vector, initial spin configuration
 function sim_anneal(N_therm, N_det, probe_rate, overrelax_rate, T_i, T_f, Js, h, N, S, spins=[])
     #can set initial spin configuration, generate randomly if not
-    if length(spins) != 4*N^3
+    N_sites = 4*N^3
+    if length(spins) != N_sites
         spins = spins_initial_pyro(N, S)
     end
 
+    #precomputes interaction matrices for each bond and neighbours for each site
     H_bond = H_matrix_all(Js)
 
-    N_sweeps = N_therm + N_det
-    measurements = Any[]
-    energies = zeros(N_sweeps)
-    avg_spin = zeros(div(N_det,probe_rate), 3, 4)
+    coord_num = 6
+    neighbours = Array{Int64}(undef, coord_num, N_sites)
+    for n = 1:N_sites
+        neighbours[:, n] = neighbours_pyro(n, N)
+    end
     
-    T = T_i #temperature
+    #using 0.9^t annealing schedule
+    t_steps = convert(Int, ceil(log(T_f/T_i)/log(0.97)))
 
-    for sweep in 1:N_sweeps
-        T = max(anneal_schedule(sweep, N_therm, T_i, T_f), T_f) #stop changing T after N_therm sweeps
-        if sweep > N_therm #switch to deterministic sweeps after N_therm sweeps
-            det_update!(spins, S, H_bond, h, N)
-
-            if sweep % probe_rate == 0
-            #take measurements after thermalization every probe_rate sweeps
-            #for magnetostriction, we just want the ensemble averaged spin for each sublattice
-            #so N_det x 3 x 4 array of results for each rank
-                meas_ind = div(sweep - N_therm, probe_rate)
-                avg_spin[meas_ind, :, :] = spin_expec(spins)
-            end
-        else #otherwise, do overrelaxation and metropolis with relative frequency overrelax_rate
+    N_probe = div(N_det, probe_rate)
+    accept_count = [0]
+    measurements = Any[]
+    energies_therm = zeros(t_steps)
+    energies = zeros(N_probe)
+    avg_spin = zeros(N_probe, 3, 4)
+    
+    #metropolis + overrelaxation
+    for t in 1:t_steps
+        T = 0.97^(t-1)
+        
+        for sweep in 1:N_therm
             if sweep % overrelax_rate == 0
-                metropolis!(spins, S, H_bond, h, N, T)
+                metropolis!(spins, accept_count, S, H_bond, neighbours, h, N, T)
             else
-                overrelax_pyro!(spins, H_bond, h, N)
+                overrelax_pyro!(spins, H_bond, neighbours, h, N)
             end
         end
-            
-        energies[sweep] = E_pyro(spins, H_bond, h, N)
+
+        println("acceptance rate at T=", T, ": ", accept_count[1]/(4*N^3*N_therm/overrelax_rate)*100, "%")
+        accept_count = [0] 
+
+        energies_therm[t] = E_pyro(spins, H_bond, neighbours, h, N)
+    end
+    
+    for sweep in 1:N_det        
+        det_update!(spins, S, H_bond, neighbours, h, N)
+
+        if sweep % probe_rate == 0
+        #take measurements after thermalization every probe_rate sweeps
+        #for magnetostriction, we just want the ensemble averaged spin for each sublattice
+        #so N_det x 3 x 4 array of results for each rank
+            meas_ind = div(sweep, probe_rate)
+            avg_spin[meas_ind, :, :] = spin_expec(spins)
+            energies[meas_ind] = E_pyro(spins, H_bond, neighbours, h, N)
+        end
     end        
 
     #takes the sample average 
-    N_meas = div(N_det, probe_rate)
-    push!(measurements, 1/N_meas*sum(energies[N_therm+probe_rate:probe_rate:end]))
-    push!(measurements, 1/N_meas*dropdims(sum(avg_spin, dims=1), dims=1))
+    push!(measurements, 1/N_probe*sum(energies))
+    push!(measurements, 1/N_probe*dropdims(sum(avg_spin, dims=1), dims=1))
 
-    return spins, energies, measurements #measurements
-    #return measurements
+    return spins, energies_therm, measurements #measurements
 end
 
 #parallel tempering
@@ -263,14 +284,19 @@ function parallel_temper(rank, replica_exchange_rate, N_therm, N_det, probe_rate
         spins = spins_initial_pyro(N, S)
     end
 
-    H_bond = H_matrix_all(Js)
+    #precomputes interaction matrices for each bond and neighbours for each site
+    coord_num = 6
+    neighbours = Array{Int64}(undef, coord_num, N_sites)
+    for n = 1:N_sites
+        neighbours[:, n] = neighbours_pyro(n, N)
+    end
     
     T = temp[rank+1]
     N_sweeps = N_therm + N_det
     energies = zeros(N_sweeps)
     measurements = zeros(div(N_det,probe_rate), 3, 4)
-    #accept_count = 0 #counts number of successful swaps
-    accepts = zeros(N_sweeps)
+    accept_count = 0 #counts number of successful swaps
+    #accepts = zeros(N_sweeps)
 
     det = false #whether to do deterministic updates
     
@@ -280,24 +306,21 @@ function parallel_temper(rank, replica_exchange_rate, N_therm, N_det, probe_rate
             #for magnetostriction, we just want the ensemble averaged spin for each sublattice
             #so N_det x 4 x 3 array of results for each rank
             meas_ind = div(sweep - N_therm, probe_rate)
-            measurements[meas_ind, :, 1] = sum(spins[:,1:N^3], dims=2)[:,1]
-            measurements[meas_ind, :, 2] = sum(spins[:,(N^3+1):(2*N^3)], dims=2)[:,1]
-            measurements[meas_ind, :, 3] = sum(spins[:,(2*N^3+1):(3*N^3)], dims=2)[:,1]
-            measurements[meas_ind, :, 4] = sum(spins[:,(3*N^3+1):(4*N^3)], dims=2)[:,1]
+            measurements[meas_ind, :,: ] = spin_expec(spins)
         end
         
         #only do deterministic updates on lowest temperature rank (after thermalization)
         if rank == 0 && sweep > N_therm
             det = true 
-            det_update!(spins, S, H_bond, h, N)
+            det_update!(spins, S, H_bond, neighbours, h, N)
         else #do overrelaxation and metropolis with relative frequency overrelax_rate
             if sweep % overrelax_rate == 0
-                metropolis!(spins, S, H_bond, h, N, T)
+                metropolis!(spins, accept_count, S, H_bond, neighbours, h, N, T)
             else
-                overrelax_pyro!(spins, H_bond, h, N)
+                overrelax_pyro!(spins, H_bond, neighbours, h, N)
             end
         end
-        energies[sweep] = E_pyro(spins, H_bond, h, N)
+        energies[sweep] = E_pyro(spins, H_bond, neighbours, h, N)
 
         if sweep % replica_exchange_rate == 0
             #println(string(rank)*": it's time to swap!")
@@ -365,6 +388,7 @@ function replica_exchange!(rank, spins, E_rank, temp, swap_type)
         #prevents edge case of (R-1,R) swap if swap_type=1
         if rank%2 == swap_type && partner_rank < comm_size 
             MPI.send(spins, comm, dest=partner_rank)
+            #receive buffer?
             recv_data = MPI.recv(comm, source=partner_rank)
             #print("rank ", r, " got ", recv_data)
         end
