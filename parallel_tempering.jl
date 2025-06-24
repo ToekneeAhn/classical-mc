@@ -26,13 +26,8 @@ spins_r, energies_r, meas_r, err_r, accept_r = parallel_temper(r, replica_exchan
 
 gather_accepts = MPI.Gather(accept_r[1], comm, root=0)
 
-#writes measurements to a file
+#folder where results are saved
 save_dir = replace(pwd(),"\\"=>"/")*"/pt_out/"
-if !isdir(save_dir)
-    mkdir(save_dir)
-end
-fname="obs_h$(h_index)_$(r).h5"
-write_observables(save_dir*fname, Dict("avg_spin"=>meas_r, "avg_spin_err"=>err_r, "energy_per_site"=>energies_r[end]))
 
 if r == 0
     #=
@@ -44,6 +39,11 @@ if r == 0
         println("rank ", rr, " swapped ", gather_accepts[rr], " times.")
     end
     
+    #makes save directory if it doesn't exist
+    if !isdir(save_dir)
+        mkdir(save_dir)
+    end
+
     #writes parameters to a file
     params=Dict("Js"=>Js, "spin_length"=>S, "h"=>h, 
     "uc_N"=>N, "N_therm"=>N_therm, "N_det"=>N_det, "probe_rate" =>probe_rate,
@@ -52,3 +52,8 @@ if r == 0
     write_params(save_dir*fname_params, params)
 end
 
+MPI.Barrier(comm)
+
+#writes measurements to a file
+fname="obs_h$(h_index)_$(r).h5"
+write_observables(save_dir*fname, Dict("avg_spin"=>meas_r, "avg_spin_err"=>err_r, "energy_per_site"=>energies_r[end]))
