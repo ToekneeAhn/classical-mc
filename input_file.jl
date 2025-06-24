@@ -24,9 +24,9 @@ probe_rate=2000
 report_interval = Int(1e2)
 checkpoint_rate=100
 =#
-N_therm = 10^4 #thermalization sweeps
+N_therm = 10^3 #thermalization sweeps
 N_det = 10^4 #deterministic sweeps, although not really for pt
-probe_rate = 2 #number of sweeps between measurements, larger reduces autocorrelation between samples
+probe_rate = 100 #number of sweeps between measurements, larger reduces autocorrelation between samples
 overrelax_rate = 10 #ratio of overrelax sweeps to metropolis sweeps
 replica_exchange_rate = 50 #how many sweeps between replica exchanges
 
@@ -51,13 +51,12 @@ h4 = (h'*z4) * [gxx, gyy, gzz]
 =#
 
 #for single runs
-
-h_strength = 2.97
+#h_strength = 2.96
+h_strength=0.0
 h = h_strength*[1,1,1]/sqrt(3) #magnetic field in global frame
 
-
 #h sweep
-#N_h = 10
+#N_h = 15
 #h_sweep = range(2.7, 3.3, N_h)
 
 #------------------------------------------

@@ -24,19 +24,15 @@ Ts = exp10.(range(log10(T_min), stop=log10(T_max), length=comm_size))
 
 spins_r, energies_r, meas_r, err_r, accept_r = parallel_temper(r, replica_exchange_rate, N_therm, N_det, probe_rate, overrelax_rate, Ts, Js, h, N, S)
 
-#swap_rate = 2*replica_exchange_rate*accept_r/(N_therm+N_det)
-print("rank: ", r, " swapped ", sum(accept_r), " times.")
-
-#gather_accepts = MPI.Gather(accept_r, comm, root=0)
-#gather_meas = MPI.Gather(meas_r, comm, root=0)
+gather_accepts = MPI.Gather(accept_r[1], comm, root=0)
 
 #writes measurements to a file
-
-obs_path = replace(pwd(),"\\"=>"/")*"/pt_out/obs_h$(h_index)_$(r).h5"
-write_observables(obs_path, Dict("avg_spin"=>meas_r, "avg_spin_err"=>err_r, "energy_per_site"=>energies_r[end]))
-
-
-#todo: replace energies_r[end] with an average and get the error too
+save_dir = replace(pwd(),"\\"=>"/")*"/pt_out/"
+if !isdir(save_dir)
+    mkdir(save_dir)
+end
+fname="obs_h$(h_index)_$(r).h5"
+write_observables(save_dir*fname, Dict("avg_spin"=>meas_r, "avg_spin_err"=>err_r, "energy_per_site"=>energies_r[end]))
 
 if r == 0
     #=
@@ -44,12 +40,15 @@ if r == 0
     fid["swaps"] = gather_accepts #reshape in python since it's kinda weird here
     close(fid)
     =#
+    for rr in 1:comm_size
+        println("rank ", rr, " swapped ", gather_accepts[rr], " times.")
+    end
     
     #writes parameters to a file
     params=Dict("Js"=>Js, "spin_length"=>S, "h"=>h, 
     "uc_N"=>N, "N_therm"=>N_therm, "N_det"=>N_det, "probe_rate" =>probe_rate,
     "overrelax_rate"=>overrelax_rate, "replica_exchange_rate"=>replica_exchange_rate)
-    params_path = replace(pwd(),"\\"=>"/")*"/pt_out/params_h$(h_index).h5"
-    write_params(params_path, params)
+    fname_params = "params_h$(h_index).h5"
+    write_params(save_dir*fname_params, params)
 end
 

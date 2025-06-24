@@ -11,8 +11,8 @@ gamma_ij = [0 1 omega omega^2; 1 0 omega^2 omega; omega omega^2 0 1; omega^2 ome
 #sublattice-indexed coordinates
 struct sic 
     r::Vector{Int64} #position of unit cell (i.e. sublattice 0)
-    mu::Int #sublattice index 0,1,2,3
-    N::Int #number of unit cells in each direction
+    mu::Int64 #sublattice index 0,1,2,3
+    N::Int64 #number of unit cells in each direction
 end
 
 #defines addition of sublattice-indexed coordinates (kinda) with multiple dispatch
@@ -28,7 +28,7 @@ function flat_index_3D(r_mu::sic) #only for the 3d case
     return nx + N^2*ny + N*nz + mu*N^3 + 1
 end
 
-function sic_index_3D(n, N)
+function sic_index_3D(n::Int64, N::Int64)
     n -= 1
     mu = div(n, N^3)
     nx = n%N
@@ -59,7 +59,7 @@ end
 
 #indices of  neighbours given flat index (multiple dispatch)
 #this is the bottleneck?
-function neighbours_pyro(n::Int, N::Int) 
+function neighbours_pyro(n::Int64, N::Int64) 
     ind = n-1
     mu = div(n-1, N^3)
     r_mu = sic_index_3D(n, N)
@@ -77,8 +77,12 @@ function neighbours_pyro(n::Int, N::Int)
     return deleteat!(neighbours_flat, mu+4)
 end
 
+function set_spin!(spins::Array{Float64,2}, S_new::Vector{Float64}, site::Int64)
+    @inbounds @views spins[:, site] = S_new
+end
+
 #4 x 4 x 3 x 3 array of interaction matrices (3x3) connecting sublattices
-function H_matrix_all(Js)
+function H_matrix_all(Js::Vector{Float64})
     J_zz, J_pm, J_pmpm, J_zpm = Js
 
     H_bond = zeros(4,4,3,3)
@@ -99,19 +103,20 @@ function H_matrix_all(Js)
 end
 
 #h_loc at site i is dH/dS_i
-function local_field_pyro(spins, H_bond, neighbours_n, h, n)
+function local_field_pyro(spins::Array{Float64,2}, H_bond::Array{Float64,4}, neighbours_n::Vector{Int64}, h::Vector{Float64}, n::Int64)
     sublattice = div(n-1, N^3)
     
     h_loc = zeros(3)
     for m in neighbours_n
         @inbounds @views h_loc += H_bond[sublattice+1, div(m-1, N^3)+1,:,:] * spins[:,m]
+        #[spins[1,m],spins[2,m],spins[3,m]]
     end
 
     return h_loc - (h' * z_local[:, sublattice+1])*[0,0,1]
 end
 
 #energy of spin configuration with periodic boundary conditions
-function E_pyro(spins, H_bond, neighbours, h, N)
+function E_pyro(spins::Array{Float64,2}, H_bond::Array{Float64,4}, neighbours::Array{Int64,2}, h::Vector{Float64}, n::Int64)
     N_sites = 4*N^3
     E = 0
     
@@ -130,7 +135,7 @@ function E_pyro(spins, H_bond, neighbours, h, N)
     return E/N_sites
 end
 
-function energy_difference_pyro(spins, old_spin, H_bond, neighbours_n, h, n)
+function energy_difference_pyro(spins::Array{Float64,2}, old_spin::Vector{Float64}, H_bond::Array{Float64,4}, neighbours_n::Vector{Int64}, h::Vector{Float64}, n::Int64)
     h_loc = local_field_pyro(spins, H_bond, neighbours_n, h, n)
     @views E_new = spins[:,n]' * h_loc
     E_old = old_spin' * h_loc
@@ -145,12 +150,12 @@ function anneal_schedule(sweep, N_sweeps, T_initial, T_final)
     return T_initial*exp(a*sweep)
 end
 =#
-function anneal_schedule(t)
+function anneal_schedule(t::Int64)
     return 0.9^t
 end
 
 #intializes a random spin configuration with shape 3 x 4N^3
-function spins_initial_pyro(N, S)
+function spins_initial_pyro(N::Int64, S::Float64)
     spins = rand(3, 4*N^3)
     for j=1:4*N^3
         spins[:,j] *= S/norm(spins[:,j]) #normalizes each spin
@@ -161,7 +166,7 @@ end
 
 #picks a point on the unit sphere uniformly and returns Cartesian coordinates (Sx,Sy,Sz)
 #then scales magnitude by S
-function sphere_pick(S) 
+function sphere_pick(S::Float64) 
     #faster rng? lehmer prng
     #gaussian sphere picking for lower temperatures
     phi = 2*pi*rand()
@@ -170,7 +175,7 @@ function sphere_pick(S)
 end
 
 #metropolis algorithm with deterministic updates (aligning spins to their local field)
-function metropolis!(spins, accept_count, S, H_bond, neighbours, h, N, T)
+function metropolis!(spins::Array{Float64,2}, accept_count::Array{Int64,1}, S::Float64, H_bond::Array{Float64,4}, neighbours::Array{Int64,2}, h::Vector{Float64}, N::Int64, T::Float64)
     N_sites = 4*N^3
     
     for site in 1:N_sites #do this once for every site
@@ -190,30 +195,36 @@ function metropolis!(spins, accept_count, S, H_bond, neighbours, h, N, T)
     end 
 end
 
-function det_update!(spins, S, H_bond, neighbours, h, N)
+function det_update!(spins::Array{Float64,2}, S::Float64, H_bond::Array{Float64,4}, neighbours::Array{Int64,2}, h::Vector{Float64}, N::Int64)
     N_sites = 4*N^3
     
+    #for n in 1:N_sites
+    #    h_loc = local_field_pyro(spins, H_bond, neighbours[:,n], h, n)
+    #    spins[:,n] = -S*h_loc/norm(h_loc)
+    #end
+
     for n in 1:N_sites
         h_loc = local_field_pyro(spins, H_bond, neighbours[:,n], h, n)
-        spins[:,n] = -S*h_loc/norm(h_loc)
+        set_spin!(spins, -S*h_loc/norm(h_loc), n)
     end
 end
 
 #overrelaxation (microcanonical sweep) which reflects each spin about the local field
-function overrelax_pyro!(spins, H_bond, neighbours, h, N)
+function overrelax_pyro!(spins::Array{Float64,2}, H_bond::Array{Float64,4}, neighbours::Array{Int64,2}, h::Vector{Float64}, N::Int64)
     N_sites = 4*N^3
     
     for n in 1:N_sites
         h_loc = local_field_pyro(spins, H_bond, neighbours[:,n], h, n)
-        S_i = spins[:, n]
-        spins[:, n] = -S_i + 2* (S_i' * h_loc)/norm(h_loc)^2 * h_loc
+        @views @inbounds S_i = spins[:, n]
+        set_spin!(spins, -S_i + 2* (S_i' * h_loc)/norm(h_loc)^2 * h_loc, n)
+        #spins[:, n] = -S_i + 2* (S_i' * h_loc)/norm(h_loc)^2 * h_loc
     end
 end
 
 #number of thermalization sweeps, deterministic sweeps, overrelax:metropolis rate
 #initial temperature, target temperature, number of unit cells in each direction
 #Js = (J_zz, J_pm, J_pmpm, J_zpm), external magnetic field vector, initial spin configuration
-function sim_anneal(N_therm, N_det, probe_rate, overrelax_rate, T_i, T_f, Js, h, N, S, spins=[])
+function sim_anneal(N_therm::Int64, N_det::Int64, probe_rate::Int64, overrelax_rate::Int64, T_i::Float64, T_f::Float64, Js::Vector{Float64}, h::Vector{Float64}, N::Int64, S::Float64, spins=[])
     #can set initial spin configuration, generate randomly if not
     N_sites = 4*N^3
     if length(spins) != N_sites
@@ -230,7 +241,7 @@ function sim_anneal(N_therm, N_det, probe_rate, overrelax_rate, T_i, T_f, Js, h,
     end
     
     #using 0.9^t annealing schedule
-    t_steps = convert(Int, ceil(log(T_f/T_i)/log(0.97)))
+    t_steps = convert(Int, ceil(log(T_f/T_i)/log(0.9)))
 
     N_probe = div(N_det, probe_rate)
     accept_count = [0]
@@ -241,7 +252,7 @@ function sim_anneal(N_therm, N_det, probe_rate, overrelax_rate, T_i, T_f, Js, h,
     
     #metropolis + overrelaxation
     for t in 1:t_steps
-        T = 0.97^(t-1)
+        T = 0.9^(t-1)
         
         for sweep in 1:N_therm
             if sweep % overrelax_rate == 0
@@ -278,13 +289,16 @@ function sim_anneal(N_therm, N_det, probe_rate, overrelax_rate, T_i, T_f, Js, h,
 end
 
 #parallel tempering
-function parallel_temper(rank, replica_exchange_rate, N_therm, N_det, probe_rate, overrelax_rate, temp, Js, h, N, S, spins=[])
+function parallel_temper(rank::Int64, replica_exchange_rate::Int64, N_therm::Int64, N_det::Int64, probe_rate::Int64, overrelax_rate::Int64, temp::Vector{Float64}, Js::Vector{Float64}, h::Vector{Float64}, N::Int64, S::Float64, spins=[])
     #can set initial spin configuration, generate randomly if not
-    if length(spins) != 4*N^3
+    N_sites = 4*N^3
+    if length(spins) != N_sites
         spins = spins_initial_pyro(N, S)
     end
 
     #precomputes interaction matrices for each bond and neighbours for each site
+    H_bond = H_matrix_all(Js)
+
     coord_num = 6
     neighbours = Array{Int64}(undef, coord_num, N_sites)
     for n = 1:N_sites
@@ -295,11 +309,9 @@ function parallel_temper(rank, replica_exchange_rate, N_therm, N_det, probe_rate
     N_sweeps = N_therm + N_det
     energies = zeros(N_sweeps)
     measurements = zeros(div(N_det,probe_rate), 3, 4)
-    accept_count = 0 #counts number of successful swaps
-    #accepts = zeros(N_sweeps)
+    accept_count = [0] #counts successful metropolis steps (not currently outputted)
+    accept_count_swap = [0] #counts number of successful swaps
 
-    det = false #whether to do deterministic updates
-    
     for sweep in 1:N_sweeps
         if sweep > N_therm && sweep % probe_rate == 0
             #take measurements after thermalization every probe_rate sweeps
@@ -309,17 +321,15 @@ function parallel_temper(rank, replica_exchange_rate, N_therm, N_det, probe_rate
             measurements[meas_ind, :,: ] = spin_expec(spins)
         end
         
-        #only do deterministic updates on lowest temperature rank (after thermalization)
-        if rank == 0 && sweep > N_therm
-            det = true 
-            det_update!(spins, S, H_bond, neighbours, h, N)
-        else #do overrelaxation and metropolis with relative frequency overrelax_rate
-            if sweep % overrelax_rate == 0
-                metropolis!(spins, accept_count, S, H_bond, neighbours, h, N, T)
-            else
-                overrelax_pyro!(spins, H_bond, neighbours, h, N)
-            end
+        #do deterministic updates on lowest temperature rank (after thermalization)?
+        
+        #do overrelaxation and metropolis with relative frequency overrelax_rate
+        if sweep % overrelax_rate == 0
+            metropolis!(spins, accept_count, S, H_bond, neighbours, h, N, T)
+        else
+            overrelax_pyro!(spins, H_bond, neighbours, h, N)
         end
+        
         energies[sweep] = E_pyro(spins, H_bond, neighbours, h, N)
 
         if sweep % replica_exchange_rate == 0
@@ -327,18 +337,16 @@ function parallel_temper(rank, replica_exchange_rate, N_therm, N_det, probe_rate
 
             #alternate between swap_type 0 and swap_type 1
             swap_type = div(sweep, replica_exchange_rate)%2
-            #swap_type = 0
-            spins, accept = replica_exchange!(rank, spins, energies[sweep], temp, swap_type)
-            accepts[sweep] = accept
+            spins, accept_swap = replica_exchange!(rank, spins, energies[sweep], temp, swap_type)
+            accept_count_swap += accept_swap
         end 
     end
 
+    #=
     fname = replace(pwd(), "\\"=>"/")*"/pt_out/E_final_"*string(rank)*".txt"
     output_data = string(rank)*" "*string(T)*" "*string(energies[end])*"\n"
     write(fname, output_data)
-
-    #fname = "swaps_"*string(rank)*".txt"
-    #write(fname, string(accepts))
+    =#
 
     #computes standard error with log binning of depth L
     #want at least 30 bins, done automatically by BinningAnalysis
@@ -351,11 +359,11 @@ function parallel_temper(rank, replica_exchange_rate, N_therm, N_det, probe_rate
     #takes the sample average 
     measurements = 1/N^3*sum(measurements, dims=1)[1,:,:]/(N_det/probe_rate)
     
-    return spins, energies, measurements, err, accepts
+    return spins, energies, measurements, err, accept_count_swap
 end
 
 #do this each iteration of the loop (i.e. when it's time to try swapping)
-function replica_exchange!(rank, spins, E_rank, temp, swap_type)
+function replica_exchange!(rank::Int64, spins::Array{Float64,2}, E_rank::Float64, temp::Vector{Float64}, swap_type::Int64)
     #swap_type 0 pairs (01)(23)..., swap type 1 pairs 0(12)(34)...
     
     recv_data = copy(spins) #is this necessary?
@@ -400,5 +408,6 @@ function replica_exchange!(rank, spins, E_rank, temp, swap_type)
         end
     end
 
-    return recv_data, convert(Int, accept_arr[1])
+    return recv_data, accept_arr
 end
+
