@@ -8,8 +8,11 @@ include("input_file.jl")
 T_i = 1.0 #initial temperature
 T_f = 1e-4 #target temperature
 
+#random initial configuration
+spins = spins_initial_pyro(N, S)
+
 #simulated annealing with random initial spin configuration
-@time spins, energies_therm, measurements = sim_anneal(N_therm, N_det, probe_rate, overrelax_rate, T_i, T_f, Js, h, N, S, [])
+@time spins, energies_therm, measurements = sim_anneal(N_therm, N_det, probe_rate, overrelax_rate, T_i, T_f, Js, h, N, S, spins)
 
 #=
 N_loop = 50
@@ -47,7 +50,8 @@ end
 write_observables(save_dir*fname, Dict("energy_per_site"=>measurements[1], "avg_spin"=>measurements[2]))
 
 #writes parameters to a file
-params=Dict("Js"=>Js, "spin_length"=>S, "h"=>h, "uc_N"=>N, "N_therm"=>N_therm, "N_det"=>N_det, "probe_rate" =>probe_rate, "overrelax_rate"=>overrelax_rate)
+#use collect to turn tuple to array
+params=Dict("Js"=>collect(Js), "spin_length"=>S, "h"=>h, "uc_N"=>N, "N_therm"=>N_therm, "N_det"=>N_det, "probe_rate" =>probe_rate, "overrelax_rate"=>overrelax_rate)
 params_fname = "params.h5"
 write_params(save_dir*params_fname, params)
 

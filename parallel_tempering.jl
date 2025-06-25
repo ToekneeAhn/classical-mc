@@ -45,7 +45,7 @@ if r == 0
     end
 
     #writes parameters to a file
-    params=Dict("Js"=>Js, "spin_length"=>S, "h"=>h, 
+    params=Dict("Js"=>collect(Js), "spin_length"=>S, "h"=>h, 
     "uc_N"=>N, "N_therm"=>N_therm, "N_det"=>N_det, "probe_rate" =>probe_rate,
     "overrelax_rate"=>overrelax_rate, "replica_exchange_rate"=>replica_exchange_rate)
     fname_params = "params_h$(h_index).h5"

@@ -62,7 +62,7 @@ h = h_strength*[1,1,1]/sqrt(3) #magnetic field in global frame
 #------------------------------------------
 # set interaction parameters in meV
 #------------------------------------------
-Js = [1.0, 0.02, 0.05, 0.0] #J_zz, J_pm, J_pmpm, J_zpm
+Js = (1.0, 0.02, 0.05, 0.0) #J_zz, J_pm, J_pmpm, J_zpm
 
 #------------------------------------------
 # set min and max rank temperatures in units of meV

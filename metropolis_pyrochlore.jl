@@ -1,9 +1,11 @@
-using LinearAlgebra, BinningAnalysis
+using LinearAlgebra, StaticArrays, BinningAnalysis
 
 include("observables.jl")
 
 #local z axis on sublattice m in in column m+1
-z_local = 1/sqrt(3)*[1 1 1; 1 -1 -1; -1 1 -1; -1 -1 1]' 
+z_local = 1/sqrt(3)*[1 1 1; 1 -1 -1; -1 1 -1; -1 -1 1]'
+#local dipole moments
+local_interactions = 1.0 .* [0 0 1; 0 0 1; 0 0 1; 0 0 1]'
 #bond-dependent gamma factor
 omega = exp(2*pi*im/3)
 gamma_ij = [0 1 omega omega^2; 1 0 omega^2 omega; omega omega^2 0 1; omega^2 omega 1 0]
@@ -57,8 +59,7 @@ function neighbours_pyro(r_mu::sic)
     return deleteat!(neighbours_flat, mu+4)
 end
 
-#indices of  neighbours given flat index (multiple dispatch)
-#this is the bottleneck?
+#indices of neighbours given flat index (multiple dispatch)
 function neighbours_pyro(n::Int64, N::Int64) 
     ind = n-1
     mu = div(n-1, N^3)
@@ -74,15 +75,40 @@ function neighbours_pyro(n::Int64, N::Int64)
         r_neighbour = sic(r_p, l, N)
         neighbours_flat[l+1+3] = flat_index_3D(r_neighbour)
     end 
-    return deleteat!(neighbours_flat, mu+4)
+    return Tuple(deleteat!(neighbours_flat, mu+4))
+end
+
+function neighbours_all(N_sites)
+    coord_num = 6
+    
+    #neighbours = zeros(Int64, coord_num, N_sites)
+    neighbours = NTuple{coord_num, Int64}[]
+    
+    for n = 1:N_sites
+        #neighbours[:, n] = neighbours_pyro(n, N)
+        push!(neighbours, neighbours_pyro(n, N))
+    end
+    
+    #return SMatrix{coord_num, N_sites, Int64}(neighbours)
+    return neighbours
 end
 
 function set_spin!(spins::Array{Float64,2}, S_new::Vector{Float64}, site::Int64)
-    @inbounds @views spins[:, site] = S_new
+    @inbounds spins[:, site] .= S_new
+end
+
+function set_spin!(spins::Array{Float64,2}, S_new::NTuple{3,Float64}, site::Int64)
+    @inbounds spins[1, site] = S_new[1]
+    @inbounds spins[2, site] = S_new[2]
+    @inbounds spins[3, site] = S_new[3]
+end
+
+function get_spin(spins::Array{Float64,2}, site::Int64)::NTuple{3, Float64}
+    @inbounds return (spins[1, site], spins[2, site], spins[3, site])
 end
 
 #4 x 4 x 3 x 3 array of interaction matrices (3x3) connecting sublattices
-function H_matrix_all(Js::Vector{Float64})
+function H_matrix_all(Js::NTuple{4,Float64})
     J_zz, J_pm, J_pmpm, J_zpm = Js
 
     H_bond = zeros(4,4,3,3)
@@ -94,51 +120,86 @@ function H_matrix_all(Js::Vector{Float64})
             zeta = -conj(gamma)
             
             if sub_i != sub_j
-                H_bond[sub_i+1, sub_j+1, :, :] = conj(T)' * [J_pmpm*gamma -J_pm J_zpm*zeta; -J_pm J_pmpm*conj(gamma) J_zpm*conj(zeta); J_zpm*zeta J_zpm*conj(zeta) J_zz] * T
+                H_bond[sub_i+1, sub_j+1, :, :] .= conj(T)' * [J_pmpm*gamma -J_pm J_zpm*zeta; -J_pm J_pmpm*conj(gamma) J_zpm*conj(zeta); J_zpm*zeta J_zpm*conj(zeta) J_zz] * T
             end
         end
     end
 
-    return reinterpret(Float64, real(H_bond))
+    return SArray{Tuple{4,4,3,3},Float64}(reinterpret(Float64, real(H_bond)))
+end
+
+function zeeman_field(h, local_bases, local_interactions)
+    #=
+    zeeman_eff = zeros(3, 4)
+    for mu in 1:4
+        zeeman_eff[:,mu] = (h' * local_bases[:, mu])*local_interactions[:, mu]
+    end
+    
+    return SMatrix{3,4,Float64}(zeeman_eff)
+    =#
+    zeeman_eff = NTuple{3,Float64}[]
+    for mu in 1:4
+        push!(zeeman_eff, Tuple((h' * local_bases[:, mu])*local_interactions[:, mu]))
+    end
+    return zeeman_eff
 end
 
 #h_loc at site i is dH/dS_i
-function local_field_pyro(spins::Array{Float64,2}, H_bond::Array{Float64,4}, neighbours_n::Vector{Int64}, h::Vector{Float64}, n::Int64)
+function local_field_pyro(spins::Array{Float64,2}, H_bond::SArray{Tuple{4,4,3,3}, Float64}, neighbours_n::NTuple{6,Int64}, zeeman::Vector{NTuple{3,Float64}}, n::Int64)::NTuple{3,Float64}
     sublattice = div(n-1, N^3)
     
     h_loc = zeros(3)
+
     for m in neighbours_n
-        @inbounds @views h_loc += H_bond[sublattice+1, div(m-1, N^3)+1,:,:] * spins[:,m]
-        #[spins[1,m],spins[2,m],spins[3,m]]
+        h_loc .+= H_bond[sublattice+1, div(m-1, N^3)+1,:,:] * spins[:,m]
     end
 
-    return h_loc - (h' * z_local[:, sublattice+1])*[0,0,1]
+    h_z = zeeman[sublattice+1]
+    return (h_loc[1]-h_z[1], h_loc[2]-h_z[2], h_loc[3]-h_z[3])
+    
+    #=
+    Hx=0.0
+    Hy=0.0
+    Hz=0.0
+    
+    for m in neighbours_n
+        sx, sy, sz = get_spin(spins, m)
+        H_ij = Matrix{Float64}
+        @inbounds H_ij = H_bond[sublattice+1, div(m-1, N^3)+1, :, :]
+        @inbounds Hx += H_ij[1,1] * sx + H_ij[1,2] * sy + H_ij[1,3] * sz
+        @inbounds Hy += H_ij[2,1] * sx + H_ij[2,2] * sy + H_ij[2,3] * sz
+        @inbounds Hz += H_ij[3,1] * sx + H_ij[3,2] * sy + H_ij[3,3] * sz
+    end
+
+    h_z = zeeman[sublattice+1]
+    return (Hx-h_z[1], Hy-h_z[2], Hz-h_z[3])
+    =#
 end
 
 #energy of spin configuration with periodic boundary conditions
-function E_pyro(spins::Array{Float64,2}, H_bond::Array{Float64,4}, neighbours::Array{Int64,2}, h::Vector{Float64}, n::Int64)
+function E_pyro(spins::Array{Float64,2}, H_bond::SArray{Tuple{4,4,3,3}, Float64}, neighbours::Vector{NTuple{6,Int64}}, zeeman::Vector{NTuple{3,Float64}}, N::Int64)::Float64
     N_sites = 4*N^3
-    E = 0
+    E = 0.0
     
     for n in 1:N_sites
         #quadratic interaction, divide by 2 because each bond counted twice
         sublattice = div(n-1, N^3)
         
-        for m in neighbours[:,n]
-            @views E += 0.5 * spins[:,n]' * H_bond[sublattice+1, div(m-1, N^3)+1,:,:] * spins[:,m]
+        for m in neighbours[n]
+            @inbounds E += 0.5 * (spins[:,n]' * H_bond[sublattice+1, div(m-1, N^3)+1,:,:] * spins[:,m])
         end
 
         #zeeman contribution
-        @views E += -(h' * z_local[:, sublattice+1])*(spins[:,n]' * [0,0,1]) 
+        @inbounds E += - dot(zeeman[sublattice+1], spins[:,n])
     end
     
     return E/N_sites
 end
 
-function energy_difference_pyro(spins::Array{Float64,2}, old_spin::Vector{Float64}, H_bond::Array{Float64,4}, neighbours_n::Vector{Int64}, h::Vector{Float64}, n::Int64)
-    h_loc = local_field_pyro(spins, H_bond, neighbours_n, h, n)
-    @views E_new = spins[:,n]' * h_loc
-    E_old = old_spin' * h_loc
+function energy_difference_pyro(spins::Array{Float64,2}, old_spin::Vector{Float64}, H_bond::SArray{Tuple{4,4,3,3}, Float64}, neighbours_n::NTuple{6,Int64}, zeeman::Vector{NTuple{3,Float64}}, n::Int64)::Float64
+    h_loc = local_field_pyro(spins, H_bond, neighbours_n, zeeman, n)
+    E_new = dot(get_spin(spins, n), h_loc)
+    E_old = dot(old_spin, h_loc)
 
     return E_new - E_old 
 end
@@ -150,15 +211,15 @@ function anneal_schedule(sweep, N_sweeps, T_initial, T_final)
     return T_initial*exp(a*sweep)
 end
 =#
-function anneal_schedule(t::Int64)
+function anneal_schedule(t::Int64)::Float64
     return 0.9^t
 end
 
 #intializes a random spin configuration with shape 3 x 4N^3
-function spins_initial_pyro(N::Int64, S::Float64)
+function spins_initial_pyro(N::Int64, S::Float64)::Array{Float64,2}
     spins = rand(3, 4*N^3)
     for j=1:4*N^3
-        spins[:,j] *= S/norm(spins[:,j]) #normalizes each spin
+        spins[:,j] .*= S/norm(spins[:,j]) #normalizes each spin
         #spins[j,:] = [0,0,1]
     end
     return spins
@@ -166,79 +227,69 @@ end
 
 #picks a point on the unit sphere uniformly and returns Cartesian coordinates (Sx,Sy,Sz)
 #then scales magnitude by S
-function sphere_pick(S::Float64) 
+function sphere_pick(S::Float64)::NTuple{3,Float64}
     #faster rng? lehmer prng
     #gaussian sphere picking for lower temperatures
     phi = 2*pi*rand()
     z = 2*rand() - 1
-    return S*[sqrt(1-z^2)*cos(phi), sqrt(1-z^2)*sin(phi), z]
+    return S .* (sqrt(1-z^2)*cos(phi), sqrt(1-z^2)*sin(phi), z)
 end
 
 #metropolis algorithm with deterministic updates (aligning spins to their local field)
-function metropolis!(spins::Array{Float64,2}, accept_count::Array{Int64,1}, S::Float64, H_bond::Array{Float64,4}, neighbours::Array{Int64,2}, h::Vector{Float64}, N::Int64, T::Float64)
+function metropolis!(spins::Array{Float64,2}, accept_count::Array{Int64,1}, S::Float64, H_bond::SArray{Tuple{4,4,3,3}, Float64}, neighbours::Vector{NTuple{6,Int64}}, zeeman::Vector{NTuple{3,Float64}}, N::Int64, T::Float64)
     N_sites = 4*N^3
     
     for site in 1:N_sites #do this once for every site
         i = rand(1:N_sites)        
         old_spin = copy(spins[:,i]) #copy previous configuration 
-        spins[:,i] = sphere_pick(S)
+        set_spin!(spins, sphere_pick(S), i)
         
-        delta_E = energy_difference_pyro(spins, old_spin, H_bond, neighbours[:,i], h, i) 
+        delta_E = energy_difference_pyro(spins, old_spin, H_bond, neighbours[i], zeeman, i) 
         
         #accept if energy is lower (delta E < 0) or with probability given by Boltzmann weight
         no_accept = delta_E > 0 && (rand() > exp(-delta_E/T))
         accept_count .+= 1-no_accept
         
         if no_accept 
-            spins[:,i] = old_spin # if not accepted, revert to old spin
+            set_spin!(spins, old_spin, i)
         end
     end 
 end
 
-function det_update!(spins::Array{Float64,2}, S::Float64, H_bond::Array{Float64,4}, neighbours::Array{Int64,2}, h::Vector{Float64}, N::Int64)
+function det_update!(spins::Array{Float64,2}, S::Float64, H_bond::SArray{Tuple{4,4,3,3}, Float64}, neighbours::Vector{NTuple{6,Int64}}, zeeman::Vector{NTuple{3,Float64}}, N::Int64)
     N_sites = 4*N^3
     
-    #for n in 1:N_sites
-    #    h_loc = local_field_pyro(spins, H_bond, neighbours[:,n], h, n)
-    #    spins[:,n] = -S*h_loc/norm(h_loc)
-    #end
-
     for n in 1:N_sites
-        h_loc = local_field_pyro(spins, H_bond, neighbours[:,n], h, n)
-        set_spin!(spins, -S*h_loc/norm(h_loc), n)
+        h_loc = local_field_pyro(spins, H_bond, neighbours[n], zeeman, n)
+        set_spin!(spins, -S .* h_loc ./ norm(h_loc), n)
     end
 end
 
 #overrelaxation (microcanonical sweep) which reflects each spin about the local field
-function overrelax_pyro!(spins::Array{Float64,2}, H_bond::Array{Float64,4}, neighbours::Array{Int64,2}, h::Vector{Float64}, N::Int64)
+function overrelax_pyro!(spins::Array{Float64,2}, H_bond::SArray{Tuple{4,4,3,3}, Float64}, neighbours::Vector{NTuple{6,Int64}}, zeeman::Vector{NTuple{3,Float64}}, N::Int64)
     N_sites = 4*N^3
     
     for n in 1:N_sites
-        h_loc = local_field_pyro(spins, H_bond, neighbours[:,n], h, n)
-        @views @inbounds S_i = spins[:, n]
-        set_spin!(spins, -S_i + 2* (S_i' * h_loc)/norm(h_loc)^2 * h_loc, n)
-        #spins[:, n] = -S_i + 2* (S_i' * h_loc)/norm(h_loc)^2 * h_loc
+        h_loc = local_field_pyro(spins, H_bond, neighbours[n], zeeman, n)
+        S_i = get_spin(spins, n)
+        set_spin!(spins, .- S_i .+ 2.0 * dot(S_i, h_loc)/(h_loc[1]^2+h_loc[2]^2+h_loc[3]^2) .* h_loc, n)
     end
 end
 
 #number of thermalization sweeps, deterministic sweeps, overrelax:metropolis rate
 #initial temperature, target temperature, number of unit cells in each direction
 #Js = (J_zz, J_pm, J_pmpm, J_zpm), external magnetic field vector, initial spin configuration
-function sim_anneal(N_therm::Int64, N_det::Int64, probe_rate::Int64, overrelax_rate::Int64, T_i::Float64, T_f::Float64, Js::Vector{Float64}, h::Vector{Float64}, N::Int64, S::Float64, spins=[])
+function sim_anneal(N_therm::Int64, N_det::Int64, probe_rate::Int64, overrelax_rate::Int64, T_i::Float64, T_f::Float64, Js::NTuple{4,Float64}, h::Vector{Float64}, N::Int64, S::Float64, spins=[])
     #can set initial spin configuration, generate randomly if not
     N_sites = 4*N^3
-    if length(spins) != N_sites
+    if length(spins) != 3*N_sites
         spins = spins_initial_pyro(N, S)
     end
 
-    #precomputes interaction matrices for each bond and neighbours for each site
+    #precomputes interaction matrices for each bond, neighbours for each site, and zeeman interaction for each sublattice
     H_bond = H_matrix_all(Js)
-
-    coord_num = 6
-    neighbours = Array{Int64}(undef, coord_num, N_sites)
-    for n = 1:N_sites
-        neighbours[:, n] = neighbours_pyro(n, N)
-    end
+    neighbours = neighbours_all(N_sites)
+    zeeman = zeeman_field(h, z_local, local_interactions)
     
     #using 0.9^t annealing schedule
     t_steps = convert(Int, ceil(log(T_f/T_i)/log(0.9)))
@@ -256,20 +307,20 @@ function sim_anneal(N_therm::Int64, N_det::Int64, probe_rate::Int64, overrelax_r
         
         for sweep in 1:N_therm
             if sweep % overrelax_rate == 0
-                metropolis!(spins, accept_count, S, H_bond, neighbours, h, N, T)
+                metropolis!(spins, accept_count, S, H_bond, neighbours, zeeman, N, T)
             else
-                overrelax_pyro!(spins, H_bond, neighbours, h, N)
+                overrelax_pyro!(spins, H_bond, neighbours, zeeman, N)
             end
         end
 
         println("acceptance rate at T=", T, ": ", accept_count[1]/(4*N^3*N_therm/overrelax_rate)*100, "%")
         accept_count = [0] 
 
-        energies_therm[t] = E_pyro(spins, H_bond, neighbours, h, N)
+        energies_therm[t] = E_pyro(spins, H_bond, neighbours, zeeman, N)
     end
     
     for sweep in 1:N_det        
-        det_update!(spins, S, H_bond, neighbours, h, N)
+        det_update!(spins, S, H_bond, neighbours, zeeman, N)
 
         if sweep % probe_rate == 0
         #take measurements after thermalization every probe_rate sweeps
@@ -277,7 +328,7 @@ function sim_anneal(N_therm::Int64, N_det::Int64, probe_rate::Int64, overrelax_r
         #so N_det x 3 x 4 array of results for each rank
             meas_ind = div(sweep, probe_rate)
             avg_spin[meas_ind, :, :] = spin_expec(spins)
-            energies[meas_ind] = E_pyro(spins, H_bond, neighbours, h, N)
+            energies[meas_ind] = E_pyro(spins, H_bond, neighbours, zeeman, N)
         end
     end        
 
@@ -289,21 +340,17 @@ function sim_anneal(N_therm::Int64, N_det::Int64, probe_rate::Int64, overrelax_r
 end
 
 #parallel tempering
-function parallel_temper(rank::Int64, replica_exchange_rate::Int64, N_therm::Int64, N_det::Int64, probe_rate::Int64, overrelax_rate::Int64, temp::Vector{Float64}, Js::Vector{Float64}, h::Vector{Float64}, N::Int64, S::Float64, spins=[])
+function parallel_temper(rank::Int64, replica_exchange_rate::Int64, N_therm::Int64, N_det::Int64, probe_rate::Int64, overrelax_rate::Int64, temp::Vector{Float64}, Js::NTuple{4,Float64}, h::Vector{Float64}, N::Int64, S::Float64, spins=[])
     #can set initial spin configuration, generate randomly if not
     N_sites = 4*N^3
-    if length(spins) != N_sites
+    if length(spins) != 3*N_sites
         spins = spins_initial_pyro(N, S)
     end
 
     #precomputes interaction matrices for each bond and neighbours for each site
     H_bond = H_matrix_all(Js)
-
-    coord_num = 6
-    neighbours = Array{Int64}(undef, coord_num, N_sites)
-    for n = 1:N_sites
-        neighbours[:, n] = neighbours_pyro(n, N)
-    end
+    neighbours = neighbours_all(N_sites)
+    zeeman = zeeman_field(h, z_local, local_interactions)
     
     T = temp[rank+1]
     N_sweeps = N_therm + N_det
@@ -325,12 +372,12 @@ function parallel_temper(rank::Int64, replica_exchange_rate::Int64, N_therm::Int
         
         #do overrelaxation and metropolis with relative frequency overrelax_rate
         if sweep % overrelax_rate == 0
-            metropolis!(spins, accept_count, S, H_bond, neighbours, h, N, T)
+            metropolis!(spins, accept_count, S, H_bond, neighbours, zeeman, N, T)
         else
-            overrelax_pyro!(spins, H_bond, neighbours, h, N)
+            overrelax_pyro!(spins, H_bond, neighbours, zeeman, N)
         end
         
-        energies[sweep] = E_pyro(spins, H_bond, neighbours, h, N)
+        energies[sweep] = E_pyro(spins, H_bond, neighbours, zeeman, N)
 
         if sweep % replica_exchange_rate == 0
             #println(string(rank)*": it's time to swap!")
