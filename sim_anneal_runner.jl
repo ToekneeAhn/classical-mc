@@ -12,7 +12,7 @@ T_f = 1e-4 #target temperature
 spins = spins_initial_pyro(N, S)
 
 #simulated annealing with random initial spin configuration
-@time spins, energies_therm, measurements = sim_anneal(N_therm, N_det, probe_rate, overrelax_rate, T_i, T_f, Js, h, N, S, spins)
+@time energies_therm, measurements = sim_anneal(N_therm, N_det, probe_rate, overrelax_rate, T_i, T_f, Js, h, N, S, spins)
 
 #=
 N_loop = 50

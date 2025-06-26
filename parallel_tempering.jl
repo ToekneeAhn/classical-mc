@@ -19,10 +19,10 @@ r = MPI.Comm_rank(comm)
 # create equal logarithmically spaced temperatures
 Ts = exp10.(range(log10(T_min), stop=log10(T_max), length=comm_size)) 
 
-#initial spin configuration (optional)
-#spins = spins_initial_pyro(N) 
+#initial spin configuration 
+spins_r = spins_initial_pyro(N, S) 
 
-spins_r, energies_r, meas_r, err_r, accept_r = parallel_temper(r, replica_exchange_rate, N_therm, N_det, probe_rate, overrelax_rate, Ts, Js, h, N, S)
+energies_r, meas_r, err_r, accept_r = parallel_temper(r, replica_exchange_rate, N_therm, N_det, probe_rate, overrelax_rate, Ts, Js, h, N, S, spins_r)
 
 gather_accepts = MPI.Gather(accept_r[1], comm, root=0)
 
