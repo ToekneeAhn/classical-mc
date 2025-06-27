@@ -4,8 +4,11 @@ include("metropolis_pyrochlore.jl")
 include("write_hdf5.jl")
 include("input_file.jl")
 
-if length(ARGS) == 1
-    h_index = parse(Int64, ARGS[1])
+#first command line argument is for save directory
+save_dir = replace(pwd(),"\\"=>"/")*"/"*ARGS[1]*"/"
+
+if length(ARGS) == 2
+    h_index = parse(Int64, ARGS[2])
     h = h_sweep[h_index]*[1,1,1]/sqrt(3)
 else
     h_index = "single"
@@ -22,12 +25,9 @@ Ts = exp10.(range(log10(T_min), stop=log10(T_max), length=comm_size))
 #initial spin configuration 
 spins_r = spins_initial_pyro(N, S) 
 
-energies_r, meas_r, err_r, accept_r = parallel_temper(r, replica_exchange_rate, N_therm, N_det, probe_rate, overrelax_rate, Ts, Js, h, N, S, spins_r)
+energies_r, meas_r, err_r, accept_r = parallel_temper!(spins_r, S, N, Js, h, r, replica_exchange_rate, N_therm, N_det, probe_rate, overrelax_rate, Ts)
 
 gather_accepts = MPI.Gather(accept_r[1], comm, root=0)
-
-#folder where results are saved
-save_dir = replace(pwd(),"\\"=>"/")*"/pt_out/"
 
 if r == 0
     #=
@@ -50,6 +50,10 @@ if r == 0
     "overrelax_rate"=>overrelax_rate, "replica_exchange_rate"=>replica_exchange_rate)
     fname_params = "params_h$(h_index).h5"
     write_params(save_dir*fname_params, params)
+
+    #writes measurements to a file
+    #fname="obs_h$(h_index)_$(r).h5"
+    #write_observables(save_dir*fname, Dict("avg_spin"=>meas_r, "avg_spin_err"=>err_r, "energy_per_site"=>energies_r[end]))
 end
 
 MPI.Barrier(comm)

@@ -6,14 +6,17 @@ include("input_file.jl")
 if length(ARGS) == 1
     n = parse(Int64, ARGS[1])
 else
-    n = 4
+    n = 10
 end
 
-@time run(`$(mpiexec()) -n $n julia parallel_tempering.jl`)
+#save folder name
+save_folder = "pt_out"
 
-#h sweep where the sweep values are defined in input_file.jl
+@time run(`$(mpiexec()) -n $n julia parallel_tempering.jl $save_folder`)
+
+#h sweep
 #=
 for j in 1:N_h
-    run(`$(mpiexec()) -n $n julia parallel_tempering.jl $j`)
+    run(`$(mpiexec()) -n $n julia parallel_tempering.jl $save_folder $j`)
 end
 =#

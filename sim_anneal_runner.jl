@@ -1,4 +1,4 @@
-using BenchmarkTools, Plots
+using Plots
 
 include("metropolis_pyrochlore.jl") 
 include("write_hdf5.jl")
@@ -11,8 +11,8 @@ T_f = 1e-4 #target temperature
 #random initial configuration
 spins = spins_initial_pyro(N, S)
 
-#simulated annealing with random initial spin configuration
-@time energies_therm, measurements = sim_anneal(N_therm, N_det, probe_rate, overrelax_rate, T_i, T_f, Js, h, N, S, spins)
+#simulated annealing with annealing schedule T = T_i*0.9^t
+@time energies, measurements = sim_anneal!(spins, S, N, Js, h, N_therm, N_det, probe_rate, overrelax_rate, T_i, T_f, t->0.9^t)
 
 #=
 N_loop = 50
@@ -56,7 +56,7 @@ params_fname = "params.h5"
 write_params(save_dir*params_fname, params)
 
 #plot energy as a function of sweep
-display(plot(energies_therm, xlabel="Sweep", ylabel="E/|Jzz| per site", legend=false, ms=2,title=Js))
+display(plot(energies, xlabel="Sweep", ylabel="E/|Jzz| per site", legend=false, ms=2,title=Js))
 
 #.plot spin components, grouped by sublattice
 scatter(spins[1,:], label="Sx", ms=4, plot_title=Js)
