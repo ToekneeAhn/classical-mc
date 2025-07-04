@@ -1,36 +1,41 @@
 using HDF5
 
-#writes a single thing (arr) to an hdf5 file called keyname 
+#writes an array to an hdf5 file, with key keyname
 function write_single(path, arr, keyname="spins")
     file = h5open(path, "w") 
     file[keyname] = arr 
     close(file)
 end
 
-function write_params(path, param_dict)
-    allowed_keys = ["Js", "spin_length", "h", "uc_N", "N_therm", "N_det", "overrelax_rate", "replica_exchange_rate", "probe_rate"]
-    
+#writes everything except measurements to a file
+function write_all(path, mc::Simulation)
     file = h5open(path, "w") 
 
-    for key in allowed_keys
-        if haskey(param_dict, key)
-            file[key] = param_dict[key]        
-        end
+    for key in fieldnames(SpinSystem)
+        file[String(key)] = getfield(mc.spin_system, key)
     end
     
+    for key in fieldnames(MCParams)
+        file[String(key)] = getfield(mc.parameters, key)
+    end
+
+    file["T"] = [mc.T]
+
     close(file)
 end
 
-function write_observables(path, obs_dict)
-    allowed_keys = ["energy_per_site", "energy_per_site_err", "avg_spin", "avg_spin_err"]
-
-    file = h5open(path, "w") 
-
-    for key in allowed_keys
-        if haskey(obs_dict, key)
-            file[key] = obs_dict[key]        
-        end
-    end
+#writes measurements to a file
+function write_observables(path, mc::Simulation)
+    obs = mc.observables
+    file = h5open(path, "w")
     
+    #compute observables
+    file["avg_spin"] = mean(obs.avg_spin,1)
+    file["avg_spin_err"] = std_error(obs.avg_spin,1)
+    file["energy_per_site"] = mean(obs.energy, 1)
+    file["energy_per_site_err"] = std_error(obs.energy,1)
+    file["magnetization"] = mean(obs.magnetization,1)
+    file["magnetization_err"] = std_error(obs.magnetization,1)
+
     close(file)
 end
