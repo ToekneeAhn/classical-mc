@@ -321,7 +321,7 @@ function sim_anneal!(mc::Simulation, T_i::Float64, schedule::Function)
     #each simulated annealing run constitues one measurement (at the end)
     E = E_pyro(mc.spin_system.spins, H_bond, neighbours, zeeman, N)
     avg_spin = spin_expec(mc.spin_system.spins, N)
-    m = norm(magnetization_global(avg_spin, local_bases))
+    m = norm(magnetization_global(avg_spin, local_bases, mc.spin_system.h))
 
     push!(mc.observables.energy, E, E^2)
     push!(mc.observables.magnetization, m, m^2)
@@ -374,7 +374,7 @@ function parallel_temper!(mc::Simulation, rank::Int64, temp::Vector{Float64})
         if sweep > N_therm && sweep % probe_rate == 0
             #take measurements after thermalization every probe_rate sweeps
             avg_spin = spin_expec(mc.spin_system.spins, N)
-            m = norm(magnetization_global(avg_spin, local_bases))
+            m = norm(magnetization_global(avg_spin, local_bases, mc.spin_system.h))
             #do we have to use norm(m)? 
 
             push!(mc.observables.energy, E, E^2)
