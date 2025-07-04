@@ -6,7 +6,7 @@ include("input_file.jl")
 if length(ARGS) == 1
     n = parse(Int64, ARGS[1])
 else
-    n = 10
+    n = 4
 end
 
 #save folder name

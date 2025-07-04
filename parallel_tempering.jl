@@ -1,4 +1,4 @@
-using MPI
+using MPI, Plots
 
 include("metropolis_pyrochlore.jl")
 include("write_hdf5.jl")
@@ -24,8 +24,11 @@ Ts = exp10.(range(log10(T_min), stop=log10(T_max), length=comm_size))
 
 #initial spin configuration 
 spins_r = spins_initial_pyro(N, S) 
-
-energies_r, meas_r, err_r, accept_r = parallel_temper!(spins_r, S, N, Js, h, r, replica_exchange_rate, N_therm, N_det, probe_rate, overrelax_rate, Ts)
+system = SpinSystem(spins_r, S, N, 4*N^3, Js, h)
+params = MCParams(N_therm, -1, overrelax_rate, N_meas, probe_rate, replica_exchange_rate)
+obs = Observables()
+simulation = Simulation(system, Ts[r+1], params, obs) #T argument is kind of useless here
+energies_r, accept_r = parallel_temper!(simulation, r, Ts)
 
 gather_accepts = MPI.Gather(accept_r[1], comm, root=0)
 
@@ -44,20 +47,15 @@ if r == 0
         mkdir(save_dir)
     end
 
-    #writes parameters to a file
-    params=Dict("Js"=>collect(Js), "spin_length"=>S, "h"=>h, 
-    "uc_N"=>N, "N_therm"=>N_therm, "N_det"=>N_det, "probe_rate" =>probe_rate,
-    "overrelax_rate"=>overrelax_rate, "replica_exchange_rate"=>replica_exchange_rate)
-    fname_params = "params_h$(h_index).h5"
-    write_params(save_dir*fname_params, params)
+    #writes everything except measurements to a file
+    fname_params = "simulation_params_h$(h_index).h5"
+    write_all(save_dir*fname_params, simulation)
 
-    #writes measurements to a file
-    #fname="obs_h$(h_index)_$(r).h5"
-    #write_observables(save_dir*fname, Dict("avg_spin"=>meas_r, "avg_spin_err"=>err_r, "energy_per_site"=>energies_r[end]))
+    #fname="energies_0.h5"
+    #write_single(save_dir*fname, energies_r, "energies")
 end
 
-MPI.Barrier(comm)
-
+MPI.Barrier(comm) #barrier in case 
 #writes measurements to a file
 fname="obs_h$(h_index)_$(r).h5"
-write_observables(save_dir*fname, Dict("avg_spin"=>meas_r, "avg_spin_err"=>err_r, "energy_per_site"=>energies_r[end]))
+write_observables(save_dir*fname, simulation)
