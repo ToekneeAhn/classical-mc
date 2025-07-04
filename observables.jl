@@ -16,13 +16,17 @@ function spin_expec(spins::Array{Float64,2}, N::Int64)::Array{Float64,2}
     return s_avg / N^3
 end
 
-#magnetization (net moment) in global frame
-function magnetization_global(local_spin_expec::Array{Float64,2}, local_frames::Vector{Matrix{Float64}})::Vector{Float64}
+#magnetization (net moment) in global frame, along external field direction
+function magnetization_global(local_spin_expec::Array{Float64,2}, local_frames::Vector{Matrix{Float64}}, h::Vector{Float64})::Vector{Float64}
     m_avg = zeros(3) 
 
     for mu in 1:4
         m_avg .+= local_frames[mu] * local_spin_expec[:,mu]
     end
 
+    if norm(h) > 0.0 #for nonzero field, calculate magnetization along the field
+        m_avg = (m_avg' * h) * h/norm(h)
+    end
+    
     return m_avg
 end

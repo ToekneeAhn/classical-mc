@@ -18,17 +18,6 @@ simulation = Simulation(system, T_f, params, Observables())
 #simulated annealing with annealing schedule T = T_i*0.9^t
 @time energies = sim_anneal!(simulation, T_i, t->0.9^t)
 
-#todo: make the measurements process better
-#=
-measurements = Any[]
-energy_final = E_pyro(spins, H_bond, neighbours, zeeman, N)
-avg_spin = spin_expec(spins, N)
-mag = magnetization_global(avg_spin, local_bases)
-push!(measurements, energy_final)
-push!(measurements, avg_spin)
-push!(measurements, mag)
-=#
-
 #write to file, create directory if it doesn't exist
 fname = "simulation_obs.h5"
 save_dir = replace(pwd(),"\\"=>"/")*"/sim_anneal/"

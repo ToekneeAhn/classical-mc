@@ -1,4 +1,4 @@
-using MPI, Plots
+using MPI
 
 include("metropolis_pyrochlore.jl")
 include("write_hdf5.jl")

@@ -32,8 +32,8 @@ function write_observables(path, mc::Simulation)
     #compute observables
     file["avg_spin"] = mean(obs.avg_spin,1)
     file["avg_spin_err"] = std_error(obs.avg_spin,1)
-    file["energy_per_site"] = mean(obs.energy, 1)
-    file["energy_per_site_err"] = std_error(obs.energy,1)
+    file["energy"] = mean(obs.energy, 1)
+    file["energy_err"] = std_error(obs.energy,1)
     file["magnetization"] = mean(obs.magnetization,1)
     file["magnetization_err"] = std_error(obs.magnetization,1)
 
