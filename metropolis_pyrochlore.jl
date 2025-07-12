@@ -394,9 +394,11 @@ function parallel_temper!(mc::Simulation, rank::Int64, temp::Vector{Float64})
         end 
     end
 
+    #=
     fname = replace(pwd(), "\\"=>"/")*"/pt_out/E_final_"*string(rank)*".txt"
     output_data = string(rank)*" "*string(T)*" "*string(energies[end])*"\n"
     write(fname, output_data)
+    =#
     
     return energies, accept_count_swap
 end

@@ -21,11 +21,11 @@ function magnetization_global(local_spin_expec::Array{Float64,2}, local_frames::
     m_avg = zeros(3) 
 
     for mu in 1:4
-        m_avg .+= local_frames[mu] * local_spin_expec[:,mu]
+        m_avg .+= local_frames[mu] * ([0,0,1] .* local_spin_expec[:,mu])
     end
 
     if norm(h) > 0.0 #for nonzero field, calculate magnetization along the field
-        m_avg = (m_avg' * h) * h/norm(h)
+        m_avg = (m_avg' * h) * h/(norm(h)^2)
     end
     
     return m_avg
