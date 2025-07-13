@@ -11,9 +11,10 @@ N_h = parse(Int64,ARGS[8])
 Ts = ARGS[9] #comma separated T_min,T_max
 results_dir = ARGS[10] 
 file_prefix = ARGS[11]
+save_dir = ARGS[12]
 
 #h sweep
 for j in 1:N_h
-    #run(`$(mpiexec()) -n $n julia parallel_tempering_2.jl $save_folder $h_direction $j`)
-    run(`$(mpiexec()) -n $n julia parallel_tempering.jl $mc_params $N_uc $S $Js $h_direction $h_sweep_args $N_h $Ts $results_dir $file_prefix $j`)
+    run(`$(mpiexec()) -n $n julia parallel_tempering.jl $mc_params $N_uc $S $Js $h_direction $h_sweep_args $N_h $Ts $results_dir $file_prefix $save_dir $j`)
 end
+
