@@ -30,3 +30,35 @@ function magnetization_global(local_spin_expec::Array{Float64,2}, local_frames::
     
     return m_avg
 end
+
+function specific_heat(mc)
+    E_E_sq = mc.observables.energy
+
+    temp = mc.T
+    N_sites = mc.spin_system.N_sites 
+
+    #compute specific heat 
+    C(e) = 1/temp^2 * (e[2]-e[1]*e[1]) / N_sites
+    grad_C(e) = [-2.0 * 1/temp^2 * e[1] / N_sites, 1/temp^2 / N_sites] 
+
+    heat = mean(E_E_sq, C)
+    dheat = std_error(E_E_sq, grad_C)
+
+    return heat, dheat
+end
+
+function susceptibility(mc)
+    m_m_sq = mc.observables.magnetization
+
+    temp = mc.T
+    N_sites = mc.spin_system.N_sites 
+
+    #compute specific heat 
+    C(m) = 1/temp * (m[2]-m[1]*m[1]) / N_sites
+    grad_C(m) = [-2.0 * 1/temp * m[1] / N_sites, 1/temp / N_sites] 
+
+    susc = mean(m_m_sq, C)
+    dsusc = std_error(m_m_sq, grad_C)
+
+    return susc, dsusc
+end

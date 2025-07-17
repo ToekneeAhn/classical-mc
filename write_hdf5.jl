@@ -29,6 +29,9 @@ function write_observables(path, mc::Simulation)
     obs = mc.observables
     file = h5open(path, "w")
     
+    heat, dheat = specific_heat(mc)
+    susc, dsusc = susceptibility(mc)
+
     #compute observables
     file["avg_spin"] = mean(obs.avg_spin,1)
     file["avg_spin_err"] = std_error(obs.avg_spin,1)
@@ -36,6 +39,10 @@ function write_observables(path, mc::Simulation)
     file["energy_err"] = std_error(obs.energy,1)
     file["magnetization"] = mean(obs.magnetization,1)
     file["magnetization_err"] = std_error(obs.magnetization,1)
+    file["specific_heat"] = heat
+    file["specific_heat_err"] = dheat
+    file["susceptibility"] = susc
+    file["susceptibility_err"] = dsusc
 
     close(file)
 end
@@ -62,12 +69,17 @@ function collect_hsweep(results_dir::String, file_prefix::String, save_dir::Stri
     N_ranks = length(temps)
 
     for rank in 0:(N_ranks-1)
+        #how to make this less bad 
         mag = zeros(N_h)
         mag_err = zeros(N_h)
         energy = zeros(N_h)
         energy_err = zeros(N_h)
         avg_spin = zeros(N_h, 3, 4)
         avg_spin_err = zeros(N_h, 3, 4)
+        spec_heat = zeros(N_h)
+        spec_heat_err = zeros(N_h)
+        susc = zeros(N_h)
+        susc_err = zeros(N_h)
 
         for n in 1:N_h
             fname = file_prefix*"$(n)_$(rank).h5"
@@ -81,6 +93,10 @@ function collect_hsweep(results_dir::String, file_prefix::String, save_dir::Stri
                 energy_err[n] = read(fid["energy_err"])
                 avg_spin[n,:,:] = read(fid["avg_spin"])
                 avg_spin_err[n,:,:] = read(fid["avg_spin_err"])
+                spec_heat[n] = read(fid["specific_heat"])
+                spec_heat_err[n] = read(fid["specific_heat_err"])
+                susc[n] = read(fid["susceptibility"])
+                susc_err[n] = read(fid["susceptibility_err"])
                 
                 close(fid)
             else
@@ -96,6 +112,10 @@ function collect_hsweep(results_dir::String, file_prefix::String, save_dir::Stri
         gr["energy_err"] = energy_err
         gr["avg_spin"] = avg_spin
         gr["avg_spin_err"] = avg_spin_err
+        gr["specific_heat"] = spec_heat
+        gr["specific_heat_err"] = spec_heat_err
+        gr["susceptibility"] = susc
+        gr["susceptibility_err"] = susc_err
     end
 
     close(file)
