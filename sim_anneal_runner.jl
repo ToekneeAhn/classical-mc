@@ -1,4 +1,4 @@
-using Plots
+using Random, Plots
 
 include("metropolis_pyrochlore.jl") 
 include("write_hdf5.jl")
@@ -8,17 +8,24 @@ include("input_file.jl")
 T_i = 1.0 #initial temperature
 T_f = 1e-4 #target temperature
 
+N_sites = 4*N^3
 #random initial configuration
 spins = spins_initial_pyro(N, S)
 
-system = SpinSystem(spins, S, N, 4*N^3, Js, h)
+disorder_strength = 3.132 #in K
+H_ij = H_matrix_all(Js)
+neighbours = neighbours_all(N_sites)
+zeeman = zeeman_field_random(h, z_local, local_interactions, disorder_strength, N_sites)
+
+system = SpinSystem(spins, S, N, N_sites, Js, h, disorder_strength, H_ij, neighbours, zeeman)
 params = MCParams(N_therm, N_det, overrelax_rate, -1, -1, -1)
-simulation = Simulation(system, T_f, params, Observables())
+simulation = Simulation(system, T_f, params, Observables()) #set temperature to T_f to use in observables
 
 #simulated annealing with annealing schedule T = T_i*0.9^t
 @time energies = sim_anneal!(simulation, T_i, t->0.9^t)
 
 #write to file, create directory if it doesn't exist
+#=
 fname = "simulation_obs.h5"
 save_dir = replace(pwd(),"\\"=>"/")*"/sim_anneal/"
 if !isdir(save_dir)
@@ -30,6 +37,7 @@ write_observables(save_dir*fname, simulation)
 #writes parameters to a file
 fname_params = "simulation_params.h5"
 write_all(save_dir*fname_params, simulation)
+=#
 
 #plot energy as a function of sweep
 display(plot(energies, xlabel="Sweep", ylabel="E/|Jzz|", legend=false, ms=2,title=Js))
