@@ -1,110 +1,77 @@
-using Plots
+using MPI, LinearAlgebra
 
-include("metropolis_pyrochlore.jl") 
+include("metropolis_pyrochlore.jl")
 include("write_hdf5.jl")
-include("input_file.jl")
 
-#single run
-T_i = 1.0 #initial temperature
-T_f = 1e-4 #target temperature
+mc_params = ARGS[1]
+N_therm, overrelax_rate, N_det = [parse(Int64, num) for num in split(mc_params,",")]
+N = parse(Int64, ARGS[2])
+S = parse(Float64, ARGS[3])
+Js = ARGS[4]
+Js = [parse(Float64, num) for num in split(Js,",")]
+delta_12 = Js[5:6]
+h_direction = ARGS[5] #comma-separated e.g. "1,1,1" or "1,1,0"
+h_direction = [parse(Int64, hh) for hh in split(h_direction,",")]
+h_direction /= norm(h_direction)
+h_sweep_args = ARGS[6]
+h_min, h_max = [parse(Float64, num) for num in split(h_sweep_args,",")]
+N_h = parse(Int64, ARGS[7])
+Ts = ARGS[8]
+T_f, T_i = [parse(Float64, num) for num in split(Ts,",")]
+results_dir = replace(pwd(),"\\"=>"/")*"/"*ARGS[9]
+file_prefix = ARGS[10]
+save_dir = ARGS[11]
+disorder_strength = parse(Float64, ARGS[12])
+disorder_seed = [parse(Int64, ARGS[13])]
 
+MPI.Init()
+comm = MPI.COMM_WORLD
+comm_size = MPI.Comm_size(comm)
+r = MPI.Comm_rank(comm)
+h_index = r + 1
+
+h_sweep = range(h_min, h_max, N_h)
+h = h_sweep[h_index]*h_direction
+
+#do a broadcast to ensure all replicas have the same disorder configuration
+if disorder_seed[1] == 0
+    disorder_seed = [rand(1:10^9)]
+    MPI.Bcast!(disorder_seed, root=0, comm)
+end
+disorder_seed = disorder_seed[1]
+
+N_sites = 4*N^3
 #random initial configuration
 spins = spins_initial_pyro(N, S)
 
-system = SpinSystem(spins, S, N, 4*N^3, Js, h)
+H_ij = H_matrix_all(Js)
+neighbours = neighbours_all(N_sites)
+zeeman = zeeman_field_random(h, z_local, local_interactions, delta_12, disorder_strength, N_sites, disorder_seed)
+
+system = SpinSystem(spins, S, N, N_sites, Js, h, disorder_strength, H_ij, neighbours, zeeman)
 params = MCParams(N_therm, N_det, overrelax_rate, -1, -1, -1)
 simulation = Simulation(system, T_f, params, Observables())
 
 #simulated annealing with annealing schedule T = T_i*0.9^t
-@time energies = sim_anneal!(simulation, T_i, t->0.9^t)
+sim_anneal!(simulation, T_i, t->0.9^t)
 
-#write to file, create directory if it doesn't exist
-fname = "simulation_obs.h5"
-save_dir = replace(pwd(),"\\"=>"/")*"/sim_anneal/"
-if !isdir(save_dir)
-    mkdir(save_dir)
-end
-
-write_observables(save_dir*fname, simulation)
-
-#writes parameters to a file
-fname_params = "simulation_params.h5"
-write_all(save_dir*fname_params, simulation)
-
-#plot energy as a function of sweep
-display(plot(energies, xlabel="Sweep", ylabel="E/|Jzz|", legend=false, ms=2,title=Js))
-
-#.plot spin components, grouped by sublattice
-scatter(spins[1,:], label="Sx", ms=4, plot_title=Js)
-scatter!(spins[2,:], label="Sy", ms=4)
-scatter!(spins[3,:], label="Sz", ms=4)
-ylims!(-1.1,1.1)
-xticks!([N^3, 2*N^3, 3*N^3, 4*N^3])
-vline!([N^3, 2*N^3, 3*N^3, 4*N^3].+0.5, linestyle=:dash, linecolor=:red, label="")
-
-
-#=
-N_loop = 50
-
-energies = zeros(N_loop)
-avg_spin = zeros(N_loop, 3, 4)
-
-for n in 1:N_loop
-    #random initial configuration
-    spins = spins_initial_pyro(N, S)
-
-    filler, measurements = sim_anneal!(spins, S, N, Js, h, N_therm, N_det, probe_rate, overrelax_rate, T_i, T_f, t->0.9^t)
-    energies[n] = measurements[1]
-    avg_spin[n,:,:] = measurements[2]
-    if n%10 == 0
-        println("sweep ", n, " of ", N_loop)
+if r == 0    
+    #makes save directory if it doesn't exist
+    if !isdir(results_dir)
+        mkdir(results_dir)
     end
 end
 
-out_path = replace(pwd(),"\\"=>"/")*"/sim_anneal/"
-write_single(out_path*"sim_anneal_energy_$(h_strength).h5", energies, "energies")
-write_single(out_path*"sim_anneal_avg_spin_$(h_strength).h5", avg_spin, "avg_spin")
+MPI.Barrier(comm) #barrier in case 
+#writes measurements to a file
+fname=file_prefix*"$(h_index)_0.h5"
+write_observables(joinpath(results_dir,fname), simulation)
 
-params=Dict("Js"=>collect(Js), "spin_length"=>S, "h"=>h, "uc_N"=>N, "N_therm"=>N_therm, "N_det"=>N_det, "probe_rate" =>probe_rate, "overrelax_rate"=>overrelax_rate)
-params_fname = "params_$(h_strength).h5"
-write_params(out_path*"params_$(h_strength).h5", params)
-
-print(N_loop, " loops done!")
-=#
-
-#=
-#sweeping h to compute magnetization
-T_i = 1.0 #initial temperature
-T_f = 1e-4 #target temperature
-
-N_loop = 50
-h_sweep = range(0.0, 12.0, length=N_loop)
-
-energies = zeros(N_loop)
-avg_spin = zeros(N_loop, 3, 4)
-out_path = replace(pwd(),"\\"=>"/")*"/sim_anneal/"
-
-for n in 1:N_loop
-    #random initial configuration
-    spins = spins_initial_pyro(N, S)
-    h_loop = h_sweep[n]*[1,1,1]/sqrt(3)
-    filler, measurements = sim_anneal!(spins, S, N, Js, h_loop, N_therm, N_det, probe_rate, overrelax_rate, T_i, T_f, t->0.9^t)
-    energies[n] = measurements[1]
-    avg_spin[n,:,:] = measurements[2]
-    
-    if n%10 == 0
-        println("sweep ", n, " of ", N_loop)
+#collect results when sweep finished
+if r == 0
+    if !isdir(save_dir)
+        mkdir(save_dir)
     end
-
-    if n == 50
-        params=Dict("Js"=>collect(Js), "spin_length"=>S, "h"=>h_loop, "uc_N"=>N, "N_therm"=>N_therm, "N_det"=>N_det, "probe_rate" =>probe_rate, "overrelax_rate"=>overrelax_rate)
-        params_fname = "params_h_sweep.h5"
-        write_params(out_path*params_fname, params)
-    end
+    collect_hsweep(results_dir, file_prefix, save_dir, system, params, [T_f], h_direction, Vector(h_sweep), disorder_seed)
 end
 
-write_single(out_path*"energy_h_sweep.h5", energies, "energies")
-write_single(out_path*"avg_spin_h_sweep.h5", avg_spin, "avg_spin")
-
-print(N_loop, " loops done!")
-=#

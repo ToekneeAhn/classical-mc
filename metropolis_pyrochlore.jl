@@ -1,4 +1,4 @@
-using LinearAlgebra, StaticArrays, BinningAnalysis
+using LinearAlgebra, StaticArrays, BinningAnalysis, Random
 
 include("observables.jl")
 
@@ -33,10 +33,10 @@ mutable struct SpinSystem
     N_sites::Int64 #total number of sites in lattice
     Js::Vector{Float64} #exchange parameters
     h::Vector{Float64} #external field
-    #not sure about keeping these since they have to be computed later
-    #neighbours::Matrix{Int64} #6 x N_sites; list of neighbour indices for each site
-    #H_bond::Array{Float64, 4} #4 x 4 x 3 x 3; interaction matrices for each bond
-    #h_site::Vector{NTuple{3,Float64}} #zeeman interaction on each sublattice
+    disorder_strength::Float64 #Gamma parameter in Lorentzian distribution
+    H_bond::SArray{Tuple{4,4,3,3},Float64}
+    neighbours::Vector{NTuple{6,Int64}}
+    zeeman_field::Vector{NTuple{3,Float64}}
 end
 
 #monte carlo simulation parameters
@@ -146,10 +146,23 @@ function H_matrix_all(Js::Vector{Float64})::SArray{Tuple{4,4,3,3},Float64}
     return SArray{Tuple{4,4,3,3},Float64}(reinterpret(Float64, real(H_bond)))
 end
 
-function zeeman_field(h, local_bases, local_interactions)::Vector{NTuple{3,Float64}}
+function zeeman_field_random(h, z_local, local_interactions, delta_12, G, N_sites, seed=123)::Vector{NTuple{3,Float64}}
+    Random.seed!(seed)
+    
     zeeman_eff = NTuple{3,Float64}[]
     for mu in 1:4
-        push!(zeeman_eff, Tuple((h' * local_bases[:, mu])*local_interactions[:, mu]))
+        h_z = (h' * z_local[:, mu]) .* local_interactions[:, mu]
+        h_mu = local_bases[mu] * h
+        h_xy_quadratic = delta_12[1] .* (h_mu[1] * h_mu[3], h_mu[2] * h_mu[3], 0.0) .+ delta_12[2] .* (h_mu[2]^2 - h_mu[1]^2, 2.0 *h_mu[1] * h_mu[2], 0.0)
+
+        for n in 1:N_sites/4
+            random_strength = G*tan(pi*(rand()-0.5)) #draws from a lorentzian distribution with pdf p(h) = G/pi * 1/(G^2+h^2)
+            random_phase = 2*pi*rand()
+
+            h_xy_random = random_strength .* (cos(random_phase), sin(random_phase), 0.0)
+            
+            push!(zeeman_eff, Tuple(h_z .+ h_xy_quadratic .+ h_xy_random))
+        end
     end
     #vector of tuples is faster to index into later
     return zeeman_eff
@@ -173,7 +186,7 @@ function local_field_pyro(spins::Array{Float64,2}, H_bond::SArray{Tuple{4,4,3,3}
         @inbounds Hz += H_ij[3,1] * sx + H_ij[3,2] * sy + H_ij[3,3] * sz
     end
 
-    h_z = zeeman[sublattice]
+    h_z = zeeman[n]
     return (Hx-h_z[1], Hy-h_z[2], Hz-h_z[3])
 end
 
@@ -193,7 +206,7 @@ function E_pyro(spins::Array{Float64,2}, H_bond::SArray{Tuple{4,4,3,3}, Float64}
         end
 
         #zeeman contribution
-        @inbounds E += - dot(zeeman[sublattice], S_n)
+        @inbounds E += - dot(zeeman[n], S_n)
     end
     
     #total energy, not energy per site
@@ -282,14 +295,11 @@ function sim_anneal!(mc::Simulation, T_i::Float64, schedule::Function)
     S = mc.spin_system.S
     N_sites = mc.spin_system.N_sites
     
-    #precomputes interaction matrices for each bond, neighbours for each site, and zeeman interaction for each sublattice
-    H_bond = H_matrix_all(mc.spin_system.Js)
-    neighbours = neighbours_all(mc.spin_system.N_sites)
-    zeeman = zeeman_field(mc.spin_system.h, z_local, local_interactions)
+    H_bond = mc.spin_system.H_bond
+    neighbours = mc.spin_system.neighbours
+    zeeman = mc.spin_system.zeeman_field
     
     accept_count = [0]
-    measurements = Any[]
-    energies_therm = Float64[]
     
     #metropolis + overrelaxation
     t = 0
@@ -309,8 +319,6 @@ function sim_anneal!(mc::Simulation, T_i::Float64, schedule::Function)
         println("acceptance rate at T=", T, ": ", accept_count[1]/(N_sites*N_therm/overrelax_rate)*100, "%")
         accept_count = [0] 
 
-        push!(energies_therm, E_pyro(mc.spin_system.spins, H_bond, neighbours, zeeman, N))
-        
         t += 1
     end
     
@@ -324,11 +332,11 @@ function sim_anneal!(mc::Simulation, T_i::Float64, schedule::Function)
     m = norm(magnetization_global(avg_spin, local_bases, mc.spin_system.h))
 
     push!(mc.observables.energy, E, E^2)
-    push!(mc.observables.magnetization, m, m^2)
-    push!(mc.observables.avg_spin, avg_spin)
+    push!(mc.observables.magnetization, m, m^2, m^4)
+    push!(mc.observables.avg_spin, avg_spin, avg_spin.^2)
 
     #thermalization energies 
-    return energies_therm
+    #return energies_therm
 end
 
 function parallel_temper!(mc::Simulation, rank::Int64, temp::Vector{Float64})
@@ -341,10 +349,9 @@ function parallel_temper!(mc::Simulation, rank::Int64, temp::Vector{Float64})
     N = mc.spin_system.N
     S = mc.spin_system.S
     
-    #precomputes interaction matrices for each bond, neighbours for each site, and zeeman interaction for each sublattice
-    H_bond = H_matrix_all(mc.spin_system.Js)
-    neighbours = neighbours_all(mc.spin_system.N_sites)
-    zeeman = zeeman_field(mc.spin_system.h, z_local, local_interactions)
+    H_bond = mc.spin_system.H_bond
+    neighbours = mc.spin_system.neighbours
+    zeeman = mc.spin_system.zeeman_field
     
     T = temp[rank+1]
     N_sweeps = N_therm + N_meas
@@ -378,8 +385,8 @@ function parallel_temper!(mc::Simulation, rank::Int64, temp::Vector{Float64})
             #do we have to use norm(m)? 
 
             push!(mc.observables.energy, E, E^2)
-            push!(mc.observables.magnetization, m, m^2)
-            push!(mc.observables.avg_spin, avg_spin)
+            push!(mc.observables.magnetization, m, m^2, m^4)
+            push!(mc.observables.avg_spin, avg_spin, spin_expec(mc.spin_system.spins.^2, N))
         end 
 
         if sweep % replica_exchange_rate == 0

@@ -7,7 +7,14 @@ dirname=${dirname:-/}
 rsync -av --progress --exclude=.git $PWD $SCRATCH
 cd $SCRATCH/$dirname
 
-echo "Running job in `pwd`"
-echo "Starting run at: `date`"
-
-sbatch mpi_jobscript.sh
+if [[ $1 = "pt" ]]
+then
+  echo "Running parallel tempering in `pwd`"
+  sbatch mpi_jobscript.sh
+elif [[ $1 = "sa" ]]
+then
+  echo "Running simulated annealing in `pwd`"
+  sbatch sim_anneal_jobscript.sh
+else
+  echo "No job started" 
+fi

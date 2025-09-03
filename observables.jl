@@ -1,8 +1,10 @@
+using BinningAnalysis
+
 mutable struct Observables
     energy::ErrorPropagator{Float64,32}
     magnetization::ErrorPropagator{Float64,32}
     avg_spin::ErrorPropagator{Matrix{Float64},32} #get the mean and std_error by adding extra argument 1 (for 1st dataset)
-    Observables() = new(ErrorPropagator(Float64), ErrorPropagator(Float64), ErrorPropagator(zeros(Float64, 3,4)))
+    Observables() = new(ErrorPropagator(Float64, N_args=2), ErrorPropagator(Float64, N_args=3), ErrorPropagator(zeros(Float64, 3,4), zeros(Float64, 3,4)))
 end
 
 #average spin on sublattice in local frame
@@ -31,18 +33,23 @@ function magnetization_global(local_spin_expec::Array{Float64,2}, local_frames::
     return m_avg
 end
 
+#the same as std_error() but takes absolute value of variance 
+#due to floating point error, the variance can become negative if it's too close to zero (?)
+function std_error_safe(ep::ErrorPropagator, gradient::Function, lvl = BinningAnalysis._reliable_level(ep))
+    return sqrt(abs(varN(ep, gradient, lvl)))
+end
+
 function specific_heat(mc)
     E_E_sq = mc.observables.energy
 
     temp = mc.T
     N_sites = mc.spin_system.N_sites 
 
-    #compute specific heat 
     C(e) = 1/temp^2 * (e[2]-e[1]*e[1]) / N_sites
     grad_C(e) = [-2.0 * 1/temp^2 * e[1] / N_sites, 1/temp^2 / N_sites] 
 
     heat = mean(E_E_sq, C)
-    dheat = std_error(E_E_sq, grad_C)
+    dheat = std_error_safe(E_E_sq, grad_C)
 
     return heat, dheat
 end
@@ -53,12 +60,23 @@ function susceptibility(mc)
     temp = mc.T
     N_sites = mc.spin_system.N_sites 
 
-    #compute specific heat 
-    C(m) = 1/temp * (m[2]-m[1]*m[1]) / N_sites
-    grad_C(m) = [-2.0 * 1/temp * m[1] / N_sites, 1/temp / N_sites] 
+    chi(m) = 1/temp * (m[2]-m[1]*m[1]) / N_sites
+    grad_chi(m) = [-2.0 * 1/temp * m[1] / N_sites, 1/temp / N_sites, 0.0] 
 
-    susc = mean(m_m_sq, C)
-    dsusc = std_error(m_m_sq, grad_C)
+    susc = mean(m_m_sq, chi)
+    dsusc = std_error_safe(m_m_sq, grad_chi)
 
     return susc, dsusc
+end
+
+function binder_cumulant(mc)
+    ms = mc.observables.magnetization
+
+    U(m) = 1.0 - m[3]/(3*m[2]^2)
+    grad_U(m) = [0.0, 2/3*m[3]/m[2]^3, - 1/(3*m[2]^2)] 
+
+    U_L = mean(ms, U)
+    dU_L = std_error_safe(ms, grad_U)
+
+    return U_L, dU_L
 end
