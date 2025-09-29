@@ -11,7 +11,7 @@ end
 function write_all(path, mc::Simulation)
     file = h5open(path, "w") 
 
-    for key in fieldnames(SpinSystem)
+    for key in fieldnames(typeof(mc.spin_system))
         value = getfield(mc.spin_system, key)
         if typeof(value) <: SArray #only have to do this for H_bond because it's a StaticArray
             file[String(key)] = Array(value)

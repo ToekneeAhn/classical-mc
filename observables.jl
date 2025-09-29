@@ -60,8 +60,8 @@ function susceptibility(mc)
     N_sites = mc.spin_system.N_sites 
 
     #compute specific heat 
-    C(m) = 1/temp * (m[2]-m[1]*m[1]) / N_sites
-    grad_C(m) = [-2.0 * 1/temp * m[1] / N_sites, 1/temp / N_sites] 
+    C(m) = N_sites * 1/temp * (m[2]-m[1]*m[1]) 
+    grad_C(m) = N_sites .* [-2.0 * 1/temp * m[1], 1/temp] 
 
     susc = mean(m_m_sq, C)
     dsusc = std_error(m_m_sq, grad_C)
