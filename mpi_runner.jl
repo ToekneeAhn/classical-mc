@@ -9,15 +9,8 @@ if length(ARGS) == 3
     h_direction = ARGS[3] #comma separated h field direction e.g. "1,1,1"
 else
     save_folder = "pt_out_test"
-    n = 4
+    n = 8
     h_direction = "1,1,1"
 end
 
 @time run(`$(mpiexec()) -n $n julia parallel_tempering.jl $save_folder $h_direction`)
-
-#h sweep
-#=
-for j in 1:N_h
-    run(`$(mpiexec()) -n $n julia parallel_tempering.jl $save_folder $h_direction $j`)
-end
-=#

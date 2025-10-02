@@ -45,7 +45,7 @@ H_ij = H_matrix_all(Js)
 neighbours = neighbours_all(N_sites)
 zeeman = zeeman_field_random(h, z_local, local_interactions, quad_strength, disorder_strength, N_sites, seed)
 system = SpinSystem(spins_r, S, N, N_sites, Js, h, disorder_strength, H_ij, neighbours, zeeman)
-params = MCParams(N_therm, -1, overrelax_rate, N_meas, probe_rate, replica_exchange_rate)
+params = MCParams(N_therm, -1, overrelax_rate, N_meas, probe_rate, replica_exchange_rate, optimize_temperature_rate)
 obs = Observables()
 simulation = Simulation(system, Ts[r+1], params, obs, r, "none") #T argument is needed for calculating observables
 energies_r, accept_metropolis_r, accept_swap_r, flow_r = parallel_temper!(simulation, r, Ts)
@@ -62,13 +62,16 @@ if r == 0
     total_swaps[1] /= 2
     total_swaps[end] /= 2
     total_metropolis = N_sites * (N_therm + N_meas)/overrelax_rate
-
+    
+    println("final temperatures: ", Ts)
     for rr in 1:comm_size
         @printf("rank %d swap rate: %.1f%% \t|\t metropolis acceptance rate: %.1f%%\n", rr, 100 * gather_accept_swap[rr]/total_swaps[rr], 100 * gather_accept_metropolis[rr]/total_metropolis)
         @printf("rank %d autocorr time: %.0f \t|\t flow: %.2f \t|\t ideal flow: %.2f\n", rr, gather_tau[rr], gather_flow[rr], 1-(rr-1)/(comm_size-1))
     end
-
+    
     #=
+    println("dsdt ", dSdT(simulation)[1])
+    println("dsdt err ", dSdT(simulation)[2])
     println("Js=", simulation.spin_system.Js)
     println("h=", h)
     println("rank 0 specific heat:", specific_heat(simulation))

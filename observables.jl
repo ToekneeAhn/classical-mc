@@ -4,7 +4,9 @@ mutable struct Observables
     energy::ErrorPropagator{Float64,32}
     magnetization::ErrorPropagator{Float64,32}
     avg_spin::ErrorPropagator{Matrix{Float64},32} #get the mean and std_error by adding extra argument 1 (for 1st dataset)
-    Observables() = new(ErrorPropagator(Float64), ErrorPropagator(Float64), ErrorPropagator(zeros(Float64, 3,4)))
+    energy_spin_covariance::Matrix{ErrorPropagator{Float64,32}}
+    Observables() = new(ErrorPropagator(Float64, N_args=2), ErrorPropagator(Float64, N_args=3), 
+    ErrorPropagator(zeros(Float64, 3,4), zeros(Float64, 3,4)), [ErrorPropagator(Float64,N_args=3) for i=1:3,j=1:4])
 end
 
 #average spin on sublattice in local frame
@@ -61,10 +63,31 @@ function susceptibility(mc)
 
     #compute specific heat 
     C(m) = N_sites * 1/temp * (m[2]-m[1]*m[1]) 
-    grad_C(m) = N_sites .* [-2.0 * 1/temp * m[1], 1/temp] 
+    grad_C(m) = N_sites .* [-2.0 * 1/temp * m[1], 1/temp, 0.0] 
 
     susc = mean(m_m_sq, C)
     dsusc = std_error(m_m_sq, grad_C)
 
     return susc, dsusc
+end
+
+function dSdT(mc)
+    HS = mc.observables.energy_spin_covariance #3x4 matrix of ErrorPropagator
+    
+    dsdt_comp = zeros(3,4)
+    d_dsdt_comp = similar(dsdt_comp)
+    
+    temp = mc.T
+    
+    cov(v) = 1/temp^2 * (v[1] - v[2]*v[3])
+    grad_cov(v) = 1/temp^2 .* [1.0, -v[3], -v[2]]
+    
+    for i in 1:3
+        for mu in 1:4
+            dsdt_comp[i,mu] = mean(HS[i,mu], cov)
+            d_dsdt_comp[i,mu] = std_error(HS[i,mu], grad_cov)
+        end
+    end
+    
+    return dsdt_comp, d_dsdt_comp
 end

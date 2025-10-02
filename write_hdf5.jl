@@ -36,6 +36,7 @@ function write_observables(path, mc::Simulation)
     
     heat, dheat = specific_heat(mc)
     susc, dsusc = susceptibility(mc)
+    spinderiv, dspinderiv = dSdT(mc)
 
     #compute observables
     file["avg_spin"] = mean(obs.avg_spin,1)
@@ -48,6 +49,74 @@ function write_observables(path, mc::Simulation)
     file["specific_heat_err"] = dheat
     file["susceptibility"] = susc
     file["susceptibility_err"] = dsusc
+    file["dSdT"] = spinderiv
+    file["dSdT_err"] = dspinderiv
+
+    close(file)
+end
+
+#collects h sweep data from all ranks and all h points into one file, as well as simulation parameters
+function collect_hsweep(results_dir::String, file_prefix::String, save_dir::String, system::SpinSystem, params::MCParams, temps::Vector{Float64}, h_direction::Vector{Float64}, h_sweep::Vector{Float64}, seed::Int64)
+    raw_files = readdir(results_dir, join=false, sort=false)
+    file = h5open(joinpath(save_dir, file_prefix*"sweep.h5"), "w")
+
+    param_gr = create_group(file, "parameters")
+    param_gr["N_therm"] = params.N_therm
+    param_gr["overrelax_rate"] = params.overrelax_rate
+    param_gr["N_meas"] = params.N_meas
+    param_gr["probe_rate"] = params.probe_rate
+    param_gr["replica_exchange_rate"] = params.replica_exchange_rate
+    param_gr["N"] = system.N
+    param_gr["S"] = system.S
+    param_gr["Js"] = system.Js
+    param_gr["Ts"] = temps
+    param_gr["h_direction"] = h_direction
+    param_gr["h_sweep"] = h_sweep
+    param_gr["disorder_strength"] = system.disorder_strength
+    param_gr["disorder_seed"] = seed
+
+    N_h = length(h_sweep)
+    N_ranks = length(temps)
+
+    function collect_group(observable::String, data_dim, rank::Int64)
+        if length(data_dim) > 1
+            data = Matrix{Float64}[]
+        else
+            data = Float64[]
+        end
+
+        for n in 1:N_h
+            fname = file_prefix*"$(n)_$(rank).h5"
+            if fname in raw_files
+                fid=h5open(joinpath(results_dir,fname),"r")
+                push!(data, read(fid[observable]))
+                close(fid)
+            else
+                println("file $(n) not found!")
+            end 
+        end
+        
+        if length(data_dim) > 1
+            dims = length(data_dim)
+            #stack along a new first axis
+            return permutedims(stack(data), vcat(dims, Vector(1:dims-1)))
+        else
+            return data
+        end
+    end
+
+    obs_dict = Dict("magnetization"=>N_h, "magnetization_err"=>N_h, "energy"=>N_h, "energy_err"=>N_h, 
+                    "specific_heat"=>N_h, "specific_heat_err"=>N_h,
+                    "susceptibility"=>N_h, "susceptibility_err"=>N_h, "binder"=>N_h, "binder_err"=>N_h,  
+                    "avg_spin"=>(N_h,3,4), "avg_spin_err"=>(N_h,3,4), "dSdT"=>(N_h,3,4), "dSdT_err"=>(N_h,3,4))
+    
+    for rank in 0:(N_ranks-1)
+        #all as a function of magnetic field h
+        gr = create_group(file, "rank_$(rank)")
+        for (obs, obs_dim) in obs_dict
+            gr[obs] = collect_group(obs, obs_dim, rank)
+        end
+    end
 
     close(file)
 end

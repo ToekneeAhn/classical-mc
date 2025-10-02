@@ -18,7 +18,7 @@ neighbours = neighbours_all(N_sites)
 zeeman = zeeman_field_random(h, z_local, local_interactions, [0.0, 0.0], disorder_strength, N_sites)
 
 system = SpinSystem(spins, S, N, N_sites, Js, h, disorder_strength, H_ij, neighbours, zeeman)
-params = MCParams(N_therm, N_det, overrelax_rate, -1, -1, -1)
+params = MCParams(N_therm, N_det, overrelax_rate, -1, -1, -1, -1)
 simulation = Simulation(system, T_f, params, Observables(), 0, "none") #set temperature to T_f to use in observables
 
 #simulated annealing with annealing schedule T = T_i*0.9^t

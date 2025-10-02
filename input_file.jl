@@ -14,6 +14,7 @@ N_meas = Int(2*10^4) #measurement sweeps
 probe_rate = Int(100) #number of sweeps between measurements, larger reduces autocorrelation between samples
 overrelax_rate = Int(10) #ratio of overrelax sweeps to metropolis sweeps
 replica_exchange_rate = Int(50) #how many sweeps between replica exchanges
+optimize_temperature_rate = Int(2000)
 
 #------------------------------------------
 # set lattice parameters 
@@ -36,5 +37,5 @@ Js = [3.0, -0.5, 0.04, 0.0]
 #------------------------------------------
 # for parallel tempering: set min and max rank temperatures in units of K
 #------------------------------------------
-T_min = 0.25
+T_min = 0.33
 T_max = 1.0

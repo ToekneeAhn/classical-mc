@@ -1,4 +1,4 @@
-using LinearAlgebra, StaticArrays, Random
+using LinearAlgebra, StaticArrays, Random, Interpolations, ForwardDiff, Integrals
 
 include("observables.jl")
 
@@ -47,6 +47,7 @@ struct MCParams
     N_meas::Int64 #measurement sweeps (parallel tempering only)
     probe_rate::Int64 #number of steps between measurements (parallel tempering only)
     replica_exchange_rate::Int64 #number of steps between replica exchange attempts (parallel tempering only)
+    optimize_temperature_rate::Int64 #number of steps between temperature rank adjustments (parallel tempering only)
 end
 
 #everything packaged in one struct
@@ -352,7 +353,8 @@ function parallel_temper!(mc::Simulation, rank::Int64, temp::Vector{Float64})
     N_meas = mc.parameters.N_meas
     probe_rate = mc.parameters.probe_rate
     replica_exchange_rate = mc.parameters.replica_exchange_rate
-    
+    optimize_temperature_rate = mc.parameters.optimize_temperature_rate
+
     N = mc.spin_system.N
     S = mc.spin_system.S
     
@@ -361,7 +363,8 @@ function parallel_temper!(mc::Simulation, rank::Int64, temp::Vector{Float64})
     zeeman = mc.spin_system.zeeman_field
 
     N_ranks = length(temp)
-    T = temp[rank+1]
+    #T = temp[rank+1]
+    T = mc.T
     N_sweeps = N_therm + N_meas
     energies = zeros(N_sweeps)
     
@@ -371,12 +374,19 @@ function parallel_temper!(mc::Simulation, rank::Int64, temp::Vector{Float64})
     n_up = 0 #number of replicas going "up" through the temperature T
     n_down = 0 #number of replicas going "down" through the temperature T
 
-    replica_history = Int64[]
+    if rank == 0
+        mc.replica_label = "up"
+        println("initial temperatures", temp)
+    elseif rank == N_ranks-1
+        mc.replica_label = "down"
+    end
+    
+    #replica_history = Int64[]
 
-    new_spins = mc.spin_system.spins #buffer for replica exchange
+    new_spins = copy(mc.spin_system.spins) #buffer for replica exchange
 
     for sweep in 1:N_sweeps
-        push!(replica_history, mc.replica_number)
+        #push!(replica_history, mc.replica_number)
         n_up += (mc.replica_label == "up")
         n_down += (mc.replica_label == "down")
         
@@ -397,8 +407,15 @@ function parallel_temper!(mc::Simulation, rank::Int64, temp::Vector{Float64})
             #do we have to use norm(m)? 
 
             push!(mc.observables.energy, E, E^2)
-            push!(mc.observables.magnetization, m, m^2)
-            push!(mc.observables.avg_spin, avg_spin)
+            push!(mc.observables.magnetization, m, m^2, m^4)
+            push!(mc.observables.avg_spin, avg_spin, spin_expec(mc.spin_system.spins.^2, N))
+
+            for i in 1:3
+                for mu in 1:4
+                    S_i_mu = avg_spin[i,mu]
+                    push!(mc.observables.energy_spin_covariance[i,mu], E*S_i_mu, E, S_i_mu)
+                end
+            end
         end 
 
         if sweep % replica_exchange_rate == 0
@@ -409,7 +426,7 @@ function parallel_temper!(mc::Simulation, rank::Int64, temp::Vector{Float64})
             new_spins, partner_replica_number, partner_label, accept_swap = replica_exchange!(mc.spin_system.spins, rank, E, mc.replica_number, mc.replica_label, temp, swap_type)
             
             if accept_swap[1]
-                mc.spin_system.spins = copy(new_spins)
+                mc.spin_system.spins .= copy(new_spins)
                 mc.replica_number = partner_replica_number
                 mc.replica_label = partner_label
 
@@ -421,11 +438,22 @@ function parallel_temper!(mc::Simulation, rank::Int64, temp::Vector{Float64})
                 end
             end
             accept_count_swap += accept_swap
+            
+            #don't update temperatures while taking measurements
+            if sweep < N_therm && sweep % optimize_temperature_rate == 0
+                flow = n_up/(n_up + n_down)
+                temp .= feedback_optimize_temperature(temp, flow, rank, comm)
+                T = temp[rank+1]
+                mc.T = temp[rank+1]
+            end
+            if sweep == N_therm
+                n_up = 0
+                n_down = 0
+            end
         end 
     end
 
     flow = n_up/(n_up + n_down)
-
     fname = replace(pwd(), "\\"=>"/")*"/pt_out/E_final_"*string(rank)*".txt"
     
     output_data = "rank $(rank) at T=$(T)\nE="*string(energies[end])*"\n"*mc.replica_label
@@ -439,11 +467,11 @@ function swap_adjacent!(arr::AbstractArray, rank::Int64, partner_rank::Int64, sw
     #prevents edge case of (R-1,R) swap if swap_type=1
     if rank%2 == swap_type && partner_rank < comm_size 
         MPI.send(arr, comm, dest=partner_rank)
-        buffer = MPI.recv(comm, source=partner_rank)
+        buffer .= MPI.recv(comm, source=partner_rank)
     end
     #prevents edge case of (-1,0) swap if swap_type=1
     if rank%2 == 1-swap_type && partner_rank >= swap_type 
-        buffer = MPI.recv(comm, source=partner_rank)
+        buffer .= MPI.recv(comm, source=partner_rank)
         MPI.send(arr, comm, dest=partner_rank)
     end
     arr = copy(buffer)
@@ -489,4 +517,82 @@ function replica_exchange!(spins::Array{Float64,2}, rank::Int64, E_rank::Float64
     end
 
     return spins, partner_replica_number[1], partner_replica_label[1], accept_arr
+end
+
+function feedback_optimize_temperature(temp::Vector{Float64}, flow::Float64, rank::Int64, comm::MPI.Comm)
+    gather_flow = MPI.Gather(flow, comm, root=0)
+    
+    if rank==0
+        function filter_flow(xs, ys, ys_opt, tol=0.25)
+            x_interp = [xs[1]]
+            y_interp = [ys[1]] #should automatically be 1
+
+            y_prev = ys[1]
+            for j in eachindex(ys)
+                val = ys[j]
+                if val < y_prev && abs(val - ys_opt[j]) < tol && val > 1e-10
+                    push!(x_interp, xs[j])
+                    push!(y_interp, val)
+                end
+                y_prev = val
+            end
+
+            push!(x_interp, xs[end])
+            push!(y_interp, ys[end])
+
+            return x_interp, y_interp
+        end
+
+        function bisection(f, a, b, tol=1e-6, max_iter=30)
+            # Ensure f(a) and f(b) have opposite signs
+            if sign(f(a)) == sign(f(b))
+                error("Function must have opposite signs at interval endpoints.")
+            end
+
+            for i in 1:max_iter
+                c = (a + b) / 2 # Calculate the midpoint
+                
+                # Check for convergence
+                if abs(f(c)) < tol || (b - a) / 2 < tol
+                    return c
+                end
+
+                # Update the interval
+                if sign(f(c)) == sign(f(a))
+                    a = c
+                else
+                    b = c
+                end
+            end
+            println("Bisection method did not converge within $max_iter iterations.")
+            return (a + b) / 2 # Return the last midpoint as an approximation
+        end
+
+        N_ranks = length(temp)
+        flow_opt = 1 .- Vector(range(0, N_ranks-1, N_ranks)) ./ (N_ranks-1)
+        T_min = temp[1]
+        T_max = temp[end]
+        x_filter, y_filter = filter_flow(temp, gather_flow, flow_opt)
+
+        interp_monotone = interpolate(x_filter, y_filter, SteffenMonotonicInterpolation())
+        
+        #interpolated flow vector and its derivative
+        g(x) = interp_monotone(x) 
+        dg(x) = -1.0 * ForwardDiff.derivative(g,x)
+        
+        C(x) = solve(IntegralProblem((x, p) -> sqrt(dg(x)), (T_min, x)), QuadGKJL()).u
+        new_temp = copy(temp) 
+        try
+            C0 = C(T_max - 1e-6) #normalization constant for eta
+            new_temp[2:end-1] .= [bisection(x -> C(x)/C0 - (1-f_opt), T_min + 1e-6, T_max - 1e-6) for f_opt in flow_opt[2:end-1]]    
+        catch DomainError
+            println("Failed to adjust temperatures")
+        end
+    else
+        new_temp = nothing
+    end
+    
+    new_temp = MPI.bcast(new_temp, 0, comm)
+
+    return new_temp
 end
