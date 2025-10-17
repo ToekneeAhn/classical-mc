@@ -48,7 +48,7 @@ system = SpinSystem(spins_r, S, N, N_sites, Js, h, disorder_strength, H_ij, neig
 params = MCParams(N_therm, -1, overrelax_rate, N_meas, probe_rate, replica_exchange_rate, optimize_temperature_rate)
 obs = Observables()
 simulation = Simulation(system, Ts[r+1], params, obs, r, "none") #T argument is needed for calculating observables
-energies_r, accept_metropolis_r, accept_swap_r, flow_r = parallel_temper!(simulation, r, Ts)
+energies_r, accept_metropolis_r, accept_swap_r, flow_r = parallel_temper!(simulation, r, Ts, comm, comm_size)
 autocorr_time = unbinned_tau(energies_r)
 
 gather_accept_metropolis = MPI.Gather(accept_metropolis_r[1], comm, root=0)
@@ -57,7 +57,7 @@ gather_tau = MPI.Gather(autocorr_time, comm, root=0)
 gather_flow = MPI.Gather(flow_r, comm, root=0)
 
 if r == 0
-    total_swaps = 2*(N_therm + N_meas)/replica_exchange_rate * ones(comm_size)
+    total_swaps = (N_therm + N_meas)/replica_exchange_rate * ones(comm_size)
     #edge temperature ranks only swap when swap_type=0, i.e. half the time
     total_swaps[1] /= 2
     total_swaps[end] /= 2

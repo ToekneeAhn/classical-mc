@@ -39,6 +39,12 @@ function magnetization_global(local_spin_expec::Array{Float64,2}, local_frames::
     return m_avg
 end
 
+#the same as std_error() but takes absolute value of variance 
+#due to floating point error, the variance can become negative if it's too close to zero (?)
+function std_error_safe(ep::ErrorPropagator, gradient::Function, lvl = BinningAnalysis._reliable_level(ep))
+    return sqrt(abs(varN(ep, gradient, lvl)))
+end
+
 function specific_heat(mc)
     E_E_sq = mc.observables.energy
 
@@ -50,7 +56,7 @@ function specific_heat(mc)
     grad_C(e) = [-2.0 * 1/temp^2 * e[1] / N_sites, 1/temp^2 / N_sites] 
 
     heat = mean(E_E_sq, C)
-    dheat = std_error(E_E_sq, grad_C)
+    dheat = std_error_safe(E_E_sq, grad_C)
 
     return heat, dheat
 end
@@ -66,7 +72,7 @@ function susceptibility(mc)
     grad_C(m) = N_sites .* [-2.0 * 1/temp * m[1], 1/temp, 0.0] 
 
     susc = mean(m_m_sq, C)
-    dsusc = std_error(m_m_sq, grad_C)
+    dsusc = std_error_safe(m_m_sq, grad_C)
 
     return susc, dsusc
 end
@@ -85,7 +91,7 @@ function dSdT(mc)
     for i in 1:3
         for mu in 1:4
             dsdt_comp[i,mu] = mean(HS[i,mu], cov)
-            d_dsdt_comp[i,mu] = std_error(HS[i,mu], grad_cov)
+            d_dsdt_comp[i,mu] = std_error_safe(HS[i,mu], grad_cov)
         end
     end
     

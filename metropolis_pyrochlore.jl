@@ -347,7 +347,7 @@ function sim_anneal!(mc::Simulation, T_i::Float64, schedule::Function)
     return energies_therm
 end
 
-function parallel_temper!(mc::Simulation, rank::Int64, temp::Vector{Float64})
+function parallel_temper!(mc::Simulation, rank::Int64, temp::Vector{Float64}, comm, comm_size::Int64)
     N_therm = mc.parameters.N_therm
     overrelax_rate = mc.parameters.overrelax_rate
     N_meas = mc.parameters.N_meas
@@ -363,13 +363,12 @@ function parallel_temper!(mc::Simulation, rank::Int64, temp::Vector{Float64})
     zeeman = mc.spin_system.zeeman_field
 
     N_ranks = length(temp)
-    #T = temp[rank+1]
     T = mc.T
     N_sweeps = N_therm + N_meas
     energies = zeros(N_sweeps)
     
     accept_count_metropolis = [0] #counts successful metropolis steps (not currently outputted)
-    accept_count_swap = [0] #counts number of successful swaps
+    accept_count_swap = 0 #counts number of successful swaps
 
     n_up = 0 #number of replicas going "up" through the temperature T
     n_down = 0 #number of replicas going "down" through the temperature T
@@ -381,12 +380,9 @@ function parallel_temper!(mc::Simulation, rank::Int64, temp::Vector{Float64})
         mc.replica_label = "down"
     end
     
-    #replica_history = Int64[]
-
     new_spins = copy(mc.spin_system.spins) #buffer for replica exchange
 
     for sweep in 1:N_sweeps
-        #push!(replica_history, mc.replica_number)
         n_up += (mc.replica_label == "up")
         n_down += (mc.replica_label == "down")
         
@@ -423,9 +419,9 @@ function parallel_temper!(mc::Simulation, rank::Int64, temp::Vector{Float64})
             #alternate between swap_type 0 and swap_type 1
             swap_type = div(sweep, replica_exchange_rate)%2
             
-            new_spins, partner_replica_number, partner_label, accept_swap = replica_exchange!(mc.spin_system.spins, rank, E, mc.replica_number, mc.replica_label, temp, swap_type)
+            new_spins, partner_replica_number, partner_label, accepted = replica_exchange!(mc.spin_system.spins, rank, E, mc.replica_number, mc.replica_label, temp, swap_type, comm, comm_size)
             
-            if accept_swap[1]
+            if accepted
                 mc.spin_system.spins .= copy(new_spins)
                 mc.replica_number = partner_replica_number
                 mc.replica_label = partner_label
@@ -436,16 +432,19 @@ function parallel_temper!(mc::Simulation, rank::Int64, temp::Vector{Float64})
                 elseif rank == N_ranks - 1
                     mc.replica_label = "down"
                 end
+                accept_count_swap += 1
             end
-            accept_count_swap += accept_swap
-            
+
             #don't update temperatures while taking measurements
+            #=
             if sweep < N_therm && sweep % optimize_temperature_rate == 0
-                flow = n_up/(n_up + n_down)
+                denom = n_up + n_down
+                flow = denom == 0 ? 0.0 : n_up / denom
                 temp .= feedback_optimize_temperature(temp, flow, rank, comm)
                 T = temp[rank+1]
                 mc.T = temp[rank+1]
             end
+            =#
             if sweep == N_therm
                 n_up = 0
                 n_down = 0
@@ -453,76 +452,88 @@ function parallel_temper!(mc::Simulation, rank::Int64, temp::Vector{Float64})
         end 
     end
 
-    flow = n_up/(n_up + n_down)
-    fname = replace(pwd(), "\\"=>"/")*"/pt_out/E_final_"*string(rank)*".txt"
-    
-    output_data = "rank $(rank) at T=$(T)\nE="*string(energies[end])*"\n"*mc.replica_label
+    denom = n_up + n_down
+    flow = denom == 0 ? 0.0 : n_up / denom
+    fname = replace(pwd(), "\\" => "/") * "/pt_out/E_final_" * string(rank) * ".txt"
+    output_data = "rank $(rank) at T=$(T)\nE=" * string(energies[end]) * "\n" * mc.replica_label
     write(fname, output_data)
-    
+
     return energies, accept_count_metropolis, accept_count_swap, flow
 end
 
-function swap_adjacent!(arr::AbstractArray, rank::Int64, partner_rank::Int64, swap_type::Int64, comm::MPI.Comm)
-    buffer = similar(arr)
-    #prevents edge case of (R-1,R) swap if swap_type=1
-    if rank%2 == swap_type && partner_rank < comm_size 
-        MPI.send(arr, comm, dest=partner_rank)
-        buffer .= MPI.recv(comm, source=partner_rank)
+function swap_adjacent!(arr::AbstractArray, rank::Int64, partner_rank::Int64, swap_type::Int64, comm, comm_size::Int64)
+    # No-op if partner is out of range
+    if partner_rank < 0 || partner_rank >= comm_size
+        return arr
     end
-    #prevents edge case of (-1,0) swap if swap_type=1
-    if rank%2 == 1-swap_type && partner_rank >= swap_type 
-        buffer .= MPI.recv(comm, source=partner_rank)
-        MPI.send(arr, comm, dest=partner_rank)
-    end
-    arr = copy(buffer)
 
+    buffer = similar(arr)
+    # Complementary ordering to avoid deadlock
+    if rank % 2 == swap_type
+        MPI.send(arr, comm, dest=partner_rank)
+        buffer .= MPI.recv(comm, source=partner_rank)
+    else
+        buffer .= MPI.recv(comm, source=partner_rank)
+        MPI.send(arr, comm, dest=partner_rank)
+    end
+
+    # copy into original array (preserve shape)
+    arr .= buffer
     return arr
 end
-#do this each iteration of the loop (i.e. when it's time to try swapping)
-function replica_exchange!(spins::Array{Float64,2}, rank::Int64, E_rank::Float64, replica_number::Int64, replica_label::String, temp::Vector{Float64}, swap_type::Int64)
-    #swap_type=0 pairs (01)(23)..., swap_type=1 pairs 0(12)(34)...
-    
-    partner_rank = iseven(rank) ? rank+(-1)^swap_type : rank-(-1)^swap_type
-    accept_arr = [false]
-    
-    #buffers
-    partner_replica_number = [-1]
-    partner_replica_label = ["none"]
 
-    #get partner energy and compute delta_E, delta_beta
-    if rank%2 == swap_type && partner_rank < comm_size 
+function replica_exchange!(spins::Array{Float64,2}, rank::Int64, E_rank::Float64, replica_number::Int64, replica_label::String, temp::Vector{Float64}, swap_type::Int64, comm, comm_size::Int64)
+    # determine partner (pairs: swap_type=0 -> (0,1)(2,3)..., swap_type=1 -> (1,2)(3,4)...)
+    partner_rank = (rank % 2 == swap_type) ? rank + 1 : rank - 1
+
+    # If partner out of range, no swap
+    if partner_rank < 0 || partner_rank >= comm_size
+        return spins, replica_number, replica_label, false
+    end
+
+    # exchange energies with complementary ordering (to avoid deadlock)
+    if rank % 2 == swap_type
+        MPI.send(E_rank, comm, dest=partner_rank)
         E_partner = MPI.recv(comm, source=partner_rank)
         delta_E = E_partner - E_rank
-        delta_beta = 1/temp[partner_rank+1] - 1/temp[rank+1]
-    elseif rank%2 == 1-swap_type && partner_rank >= swap_type
+        delta_beta = 1.0/temp[partner_rank+1] - 1.0/temp[rank+1]
+    else
+        E_partner = MPI.recv(comm, source=partner_rank)
         MPI.send(E_rank, comm, dest=partner_rank)
+        # other side does not need delta_E/delta_beta
+        delta_E = nothing
+        delta_beta = nothing
     end
 
-    #decide if swapping
-    if rank%2 == swap_type && partner_rank < comm_size 
-        accept_prob = exp(delta_beta*delta_E)
-        if rand() < accept_prob
-            accept_arr[1] = true
-        end        
-        MPI.send(accept_arr, comm, dest=partner_rank)
-    elseif rank%2 == 1-swap_type && partner_rank >= swap_type
-        accept_arr = MPI.recv(comm, source=partner_rank)
+    # decide acceptance (only the side that computed delta evaluates)
+    accept = false
+    if rank % 2 == swap_type
+        accept_prob = exp(delta_beta * delta_E)
+        
+        accept = rand() < accept_prob
+        MPI.send(accept, comm, dest=partner_rank)
+    else
+        accept = MPI.recv(comm, source=partner_rank)
     end
 
-    #it's time for the swap!
-    if accept_arr[1]    
-        spins = swap_adjacent!(spins, rank, partner_rank, swap_type, comm)
-        partner_replica_number = swap_adjacent!([replica_number], rank, partner_rank, swap_type, comm)
-        partner_replica_label = swap_adjacent!([replica_label], rank, partner_rank, swap_type, comm)
+    # perform swap if accepted (both sides must do this)
+    if accept
+        spins = swap_adjacent!(spins, rank, partner_rank, swap_type, comm, comm_size)
+
+        # swap replica_number and label through the same helper
+        partner_replica_number = swap_adjacent!([replica_number], rank, partner_rank, swap_type, comm, comm_size)[1]
+        partner_replica_label = swap_adjacent!([replica_label], rank, partner_rank, swap_type, comm, comm_size)[1]
+
+        return spins, partner_replica_number, partner_replica_label, true
     end
 
-    return spins, partner_replica_number[1], partner_replica_label[1], accept_arr
+    return spins, replica_number, replica_label, false
 end
 
 function feedback_optimize_temperature(temp::Vector{Float64}, flow::Float64, rank::Int64, comm::MPI.Comm)
     gather_flow = MPI.Gather(flow, comm, root=0)
-    
-    if rank==0
+
+    if rank == 0
         function filter_flow(xs, ys, ys_opt, tol=0.25)
             x_interp = [xs[1]]
             y_interp = [ys[1]] #should automatically be 1
