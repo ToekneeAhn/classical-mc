@@ -37,6 +37,7 @@ function write_observables(path, mc::Simulation)
     heat, dheat = specific_heat(mc)
     susc, dsusc = susceptibility(mc)
     binder, dbinder = binder_cumulant(mc)
+    susc_T, dsusc_T = dSdT(mc)
 
     #compute observables
     file["avg_spin"] = mean(obs.avg_spin,1)
@@ -53,9 +54,13 @@ function write_observables(path, mc::Simulation)
     file["susceptibility_err"] = dsusc
     file["binder"] = binder
     file["binder_err"] = dbinder
+    file["dSdT"] = susc_T
+    file["dSdT_err"] = dsusc_T
 
     close(file)
 end
+
+
 
 #collects h sweep data from all ranks and all h points into one file, as well as simulation parameters
 function collect_hsweep(results_dir::String, file_prefix::String, save_dir::String, system::SpinSystem, params::MCParams, temps::Vector{Float64}, h_direction::Vector{Float64}, h_sweep::Vector{Float64}, seed::Int64)
@@ -80,8 +85,47 @@ function collect_hsweep(results_dir::String, file_prefix::String, save_dir::Stri
     N_h = length(h_sweep)
     N_ranks = length(temps)
 
+    function collect_group(observable::String, data_dim, rank::Int64)
+        if length(data_dim) > 1
+            data = Matrix{Float64}[]
+        else
+            data = Float64[]
+        end
+
+        for n in 1:N_h
+            fname = file_prefix*"$(n)_$(rank).h5"
+            if fname in raw_files
+                fid=h5open(joinpath(results_dir,fname),"r")
+                push!(data, read(fid[observable]))
+                close(fid)
+            else
+                println("file $(n) not found!")
+            end 
+        end
+        
+        if length(data_dim) > 1
+            dims = length(data_dim)
+            #stack along a new first axis
+            return permutedims(stack(data), vcat(dims, Vector(1:dims-1)))
+        else
+            return data
+        end
+    end
+
+    obs_dict = Dict("magnetization"=>N_h, "magnetization_err"=>N_h, "energy"=>N_h, "energy_err"=>N_h, 
+                    "specific_heat"=>N_h, "specific_heat_err"=>N_h,
+                    "susceptibility"=>N_h, "susceptibility_err"=>N_h, "binder"=>N_h, "binder_err"=>N_h,  
+                    "avg_spin"=>(N_h,3,4), "avg_spin_err"=>(N_h,3,4), "dSdT"=>(N_h,3,4), "dSdT_err"=>(N_h,3,4))
+    
     for rank in 0:(N_ranks-1)
-        #how to make this less bad 
+        #all as a function of magnetic field h
+        gr = create_group(file, "rank_$(rank)")
+        for (obs, obs_dim) in obs_dict
+            gr[obs] = collect_group(obs, obs_dim, rank)
+        end
+    end
+        
+        #=
         mag = zeros(N_h)
         mag_err = zeros(N_h)
         energy = zeros(N_h)
@@ -96,6 +140,8 @@ function collect_hsweep(results_dir::String, file_prefix::String, save_dir::Stri
         susc_err = zeros(N_h)
         binder = zeros(N_h)
         binder_err = zeros(N_h)
+        ES_cov = zeros(N_h, 3, 4)
+        ES_cov_err = zeros(N_h, 3, 4)
 
         for n in 1:N_h
             fname = file_prefix*"$(n)_$(rank).h5"
@@ -117,6 +163,8 @@ function collect_hsweep(results_dir::String, file_prefix::String, save_dir::Stri
                 susc_err[n] = read(fid["susceptibility_err"])
                 binder[n] = read(fid["binder"])
                 binder_err[n] = read(fid["binder_err"])
+                ES_cov[n,:,:] = read(fid["dMdT"])
+                ES_cov_err[n,:,:] = read(fid["dMdT_err"])
                 
                 close(fid)
             else
@@ -140,7 +188,9 @@ function collect_hsweep(results_dir::String, file_prefix::String, save_dir::Stri
         gr["susceptibility_err"] = susc_err
         gr["binder"] = binder
         gr["binder_err"] = binder_err
+        gr["dMdT"] = ES_cov
+        gr["dMdT_err"] = ES_cov_err
     end
-
+    =#
     close(file)
 end

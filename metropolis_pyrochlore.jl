@@ -1,4 +1,4 @@
-using LinearAlgebra, StaticArrays, BinningAnalysis, Random
+using LinearAlgebra, StaticArrays, BinningAnalysis, Random, Interpolations, ForwardDiff, Integrals
 
 include("observables.jl")
 
@@ -47,6 +47,7 @@ struct MCParams
     N_meas::Int64 #measurement sweeps (parallel tempering only)
     probe_rate::Int64 #number of steps between measurements (parallel tempering only)
     replica_exchange_rate::Int64 #number of steps between replica exchange attempts (parallel tempering only)
+    optimize_temperature_rate::Int64 #number of steps between temperature rank adjustments (parallel tempering only)
 end
 
 #everything packaged in one struct
@@ -55,6 +56,8 @@ mutable struct Simulation
     T::Float64 #temperature
     parameters::MCParams
     observables::Observables
+    replica_number::Int64 #keeps track of where the replicas go
+    replica_label::String 
 end
 
 #assume periodic boundary conditions, so take unit cell positions mod N
@@ -152,7 +155,7 @@ function zeeman_field_random(h, z_local, local_interactions, delta_12, G, N_site
     zeeman_eff = NTuple{3,Float64}[]
     for mu in 1:4
         h_z = (h' * z_local[:, mu]) .* local_interactions[:, mu]
-        h_mu = local_bases[mu] * h
+        h_mu = local_bases[mu]' * h
         h_xy_quadratic = delta_12[1] .* (h_mu[1] * h_mu[3], h_mu[2] * h_mu[3], 0.0) .+ delta_12[2] .* (h_mu[2]^2 - h_mu[1]^2, 2.0 *h_mu[1] * h_mu[2], 0.0)
 
         for n in 1:N_sites/4
@@ -345,6 +348,7 @@ function parallel_temper!(mc::Simulation, rank::Int64, temp::Vector{Float64})
     N_meas = mc.parameters.N_meas
     probe_rate = mc.parameters.probe_rate
     replica_exchange_rate = mc.parameters.replica_exchange_rate
+    optimize_temperature_rate = mc.parameters.optimize_temperature_rate
     
     N = mc.spin_system.N
     S = mc.spin_system.S
@@ -353,24 +357,31 @@ function parallel_temper!(mc::Simulation, rank::Int64, temp::Vector{Float64})
     neighbours = mc.spin_system.neighbours
     zeeman = mc.spin_system.zeeman_field
     
-    T = temp[rank+1]
+    N_ranks = length(temp)
+    T = mc.T
     N_sweeps = N_therm + N_meas
     energies = zeros(N_sweeps)
     
-    accept_count = [0] #counts successful metropolis steps (not currently outputted)
+    accept_count_metropolis = [0] #counts successful metropolis updates
     accept_count_swap = [0] #counts number of successful swaps
+    
+    if rank == 0
+        mc.replica_label = "up"
+    elseif rank == N_ranks-1
+        mc.replica_label = "down"
+    end
 
+    n_up = 0 #number of replicas going "up" through the temperature T
+    n_down = 0 #number of replicas going "down" through the temperature T
+    new_spins = similar(mc.spin_system.spins) #buffer for replica exchange
+    
     for sweep in 1:N_sweeps
-        #do deterministic updates on lowest temperature rank (after thermalization)?
-        #=
-        if rank == 0 && sweep > N_therm
-            det_update!(spins, S, H_bond, neighbours, zeeman, N)
-        end
-        =#
+        n_up += (mc.replica_label == "up")
+        n_down += (mc.replica_label == "down")
 
         #do overrelaxation and metropolis with relative frequency overrelax_rate
         if sweep % overrelax_rate == 0
-            metropolis!(mc.spin_system.spins, accept_count, S, H_bond, neighbours, zeeman, N, T)
+            metropolis!(mc.spin_system.spins, accept_count_metropolis, S, H_bond, neighbours, zeeman, N, T)
         else
             overrelax_pyro!(mc.spin_system.spins, H_bond, neighbours, zeeman, N)
         end
@@ -387,35 +398,82 @@ function parallel_temper!(mc::Simulation, rank::Int64, temp::Vector{Float64})
             push!(mc.observables.energy, E, E^2)
             push!(mc.observables.magnetization, m, m^2, m^4)
             push!(mc.observables.avg_spin, avg_spin, spin_expec(mc.spin_system.spins.^2, N))
+            
+            for i in 1:3
+                for mu in 1:4
+                    S_i_mu = avg_spin[i,mu]
+                    push!(mc.observables.energy_spin_covariance[i,mu], E*S_i_mu, E, S_i_mu)
+                end
+            end
         end 
 
         if sweep % replica_exchange_rate == 0
             #println(string(rank)*": it's time to swap!")
-
-            #alternate between swap_type 0 and swap_type 1
-            swap_type = div(sweep, replica_exchange_rate)%2
-            #swap_type = 0
-            accept_swap = replica_exchange!(rank, mc.spin_system.spins, E, temp, swap_type)
+            swap_type = div(sweep, replica_exchange_rate)%2            
+            new_spins, partner_replica_number, partner_label, accept_swap = replica_exchange!(mc.spin_system.spins, rank, E, mc.replica_number, mc.replica_label, temp, swap_type)
             
+            if accept_swap[1]
+                mc.spin_system.spins .= copy(new_spins)
+                
+                mc.replica_number = partner_replica_number
+                mc.replica_label = partner_label
+
+                #change the "direction" of the replica if it reaches the highest or lowest rank
+                if rank == 0
+                    mc.replica_label = "up"
+                elseif rank == N_ranks - 1
+                    mc.replica_label = "down"
+                end
+            end
             accept_count_swap += accept_swap
         end 
-    end
 
-    #=
-    fname = replace(pwd(), "\\"=>"/")*"/pt_out/E_final_"*string(rank)*".txt"
-    output_data = string(rank)*" "*string(T)*" "*string(energies[end])*"\n"
-    write(fname, output_data)
-    =#
+        #=
+        #don't adjust temperatures while taking measurements
+        if sweep < N_therm && sweep % optimize_temperature_rate == 0
+            flow = n_up/(n_up + n_down)
+            temp .= feedback_optimize_temperature(temp, flow, rank, comm)
+            T = temp[rank+1]
+            mc.T = temp[rank+1]
+        end
+        =#
+        if sweep == N_therm
+            n_up = 0
+            n_down = 0
+        end
+    end
     
-    return energies, accept_count_swap
+    flow = n_up/(n_up + n_down)
+        
+    return energies, accept_count_metropolis, accept_count_swap, flow
 end
 
+function swap_adjacent!(arr::AbstractArray, rank::Int64, partner_rank::Int64, swap_type::Int64, comm::MPI.Comm)
+    buffer = similar(arr)
+    #prevents edge case of (R-1,R) swap if swap_type=1
+    if rank%2 == swap_type && partner_rank < comm_size 
+        MPI.send(arr, comm, dest=partner_rank)
+        buffer = MPI.recv(comm, source=partner_rank)
+    end
+    #prevents edge case of (-1,0) swap if swap_type=1
+    if rank%2 == 1-swap_type && partner_rank >= swap_type 
+        buffer = MPI.recv(comm, source=partner_rank)
+        MPI.send(arr, comm, dest=partner_rank)
+    end
+    arr .= copy(buffer)
+
+    return arr
+end
 #do this each iteration of the loop (i.e. when it's time to try swapping)
-function replica_exchange!(rank::Int64, spins::Array{Float64,2}, E_rank::Float64, temp::Vector{Float64}, swap_type::Int64)
+function replica_exchange!(spins::Array{Float64,2}, rank::Int64, E_rank::Float64, replica_number::Int64, replica_label::String, temp::Vector{Float64}, swap_type::Int64)
     #swap_type=0 pairs (01)(23)..., swap_type=1 pairs 0(12)(34)...
     
     partner_rank = iseven(rank) ? rank+(-1)^swap_type : rank-(-1)^swap_type
     accept_arr = [false]
+    
+    #buffers
+    partner_replica_number = [-1]
+    partner_replica_label = ["none"]
 
     #get partner energy and compute delta_E, delta_beta
     if rank%2 == swap_type && partner_rank < comm_size 
@@ -439,18 +497,91 @@ function replica_exchange!(rank::Int64, spins::Array{Float64,2}, E_rank::Float64
 
     #it's time for the swap!
     if accept_arr[1]    
-        #prevents edge case of (R-1,R) swap if swap_type=1
-        if rank%2 == swap_type && partner_rank < comm_size 
-            MPI.send(spins, comm, dest=partner_rank)
-            #receive buffer?
-            spins = MPI.recv(comm, source=partner_rank)
-        end
-        #prevents edge case of (-1,0) swap if swap_type=1
-        if rank%2 == 1-swap_type && partner_rank >= swap_type 
-            spins = MPI.recv(comm, source=partner_rank)
-            MPI.send(spins, comm, dest=partner_rank)
-        end
+        spins = swap_adjacent!(spins, rank, partner_rank, swap_type, comm)
+        partner_replica_number = swap_adjacent!([replica_number], rank, partner_rank, swap_type, comm)
+        partner_replica_label = swap_adjacent!([replica_label], rank, partner_rank, swap_type, comm)
     end
 
-    return accept_arr
+    return spins, partner_replica_number[1], partner_replica_label[1], accept_arr
+end
+
+function feedback_optimize_temperature(temp::Vector{Float64}, flow::Float64, rank::Int64, comm::MPI.Comm)
+    gather_flow = MPI.Gather(flow, comm, root=0)
+    
+    if rank==0
+        function filter_flow(xs, ys, ys_opt, tol=0.25)
+            x_interp = [xs[1]]
+            y_interp = [ys[1]] #should automatically be 1
+
+            y_prev = ys[1]
+            for j in eachindex(ys)
+                val = ys[j]
+                if val < y_prev && abs(val - ys_opt[j]) < tol && val > 1e-10
+                    push!(x_interp, xs[j])
+                    push!(y_interp, val)
+                end
+                y_prev = val
+            end
+
+            push!(x_interp, xs[end])
+            push!(y_interp, ys[end])
+
+            return x_interp, y_interp
+        end
+
+        function bisection(f, a, b, tol=1e-6, max_iter=30)
+            # Ensure f(a) and f(b) have opposite signs
+            if sign(f(a)) == sign(f(b))
+                error("Function must have opposite signs at interval endpoints.")
+            end
+
+            for i in 1:max_iter
+                c = (a + b) / 2 # Calculate the midpoint
+                
+                # Check for convergence
+                if abs(f(c)) < tol || (b - a) / 2 < tol
+                    return c
+                end
+
+                # Update the interval
+                if sign(f(c)) == sign(f(a))
+                    a = c
+                else
+                    b = c
+                end
+            end
+            println("Bisection method did not converge within $max_iter iterations.")
+            return (a + b) / 2 # Return the last midpoint as an approximation
+        end
+
+        N_ranks = length(temp)
+        flow_opt = 1 .- Vector(range(0, N_ranks-1, N_ranks)) ./ (N_ranks-1)
+        T_min = temp[1]
+        T_max = temp[end]
+        x_filter, y_filter = filter_flow(temp, gather_flow, flow_opt)
+
+        interp_monotone = interpolate(x_filter, y_filter, SteffenMonotonicInterpolation())
+        #println(x_filter, y_filter)
+
+        #interpolated flow vector and its derivative
+        g(x) = interp_monotone(x) 
+        dg(x) = -1.0 * ForwardDiff.derivative(g,x)
+
+        C(x) = solve(IntegralProblem((x, p) -> sqrt(dg(x)), (T_min, x)), QuadGKJL()).u
+        new_temp = copy(temp) 
+        
+        try
+            C0 = C(T_max - 1e-6) #normalization constant for eta
+            #solves int_{T_min}^x C(x)/C0 = r/(N_ranks-1) for rank r
+            new_temp[2:end-1] = [bisection(x -> C(x)/C0 - (1-f_opt), T_min, T_max - 1e-6) for f_opt in flow_opt[2:end-1]]
+        catch DomainError
+            println("Failed to adjust temperatures.")
+        end
+    else
+        new_temp = nothing
+    end
+    
+    new_temp = MPI.bcast(new_temp, 0, comm)
+
+    return new_temp
 end
