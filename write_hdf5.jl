@@ -120,3 +120,39 @@ function collect_hsweep(results_dir::String, file_prefix::String, save_dir::Stri
 
     close(file)
 end
+
+#saves configurations at various temperatures generated from a single simulated annealing run
+function write_collection_sim_anneal(path, configurations_save::Vector{Matrix{Float64}}, params::MCParams, system::SpinSystem, temp_save::Vector{Float64}, h_direction::Vector{Float64}, h_sweep::Vector{Float64}, seed::Int64)
+    file = h5open(path, "w")
+
+    param_gr = create_group(file, "parameters")
+    param_gr["N_therm"] = params.N_therm
+    param_gr["overrelax_rate"] = params.overrelax_rate
+    param_gr["N_meas"] = params.N_meas
+    param_gr["probe_rate"] = params.probe_rate
+    param_gr["replica_exchange_rate"] = params.replica_exchange_rate
+    param_gr["N"] = system.N
+    param_gr["S"] = system.S
+    param_gr["Js"] = system.Js
+    param_gr["h_direction"] = h_direction
+    param_gr["h_sweep"] = h_sweep
+    param_gr["disorder_strength"] = system.disorder_strength
+    param_gr["disorder_seed"] = seed
+
+    file["Ts"] = temp_save
+
+    for i in eachindex(temp_save)
+        file["spins_$(i)"] = configurations_save[i]
+    end
+    
+    close(file)
+end
+
+function read_configuration_hdf5(path::String, index::Int64)
+    file = h5open(path, "r")
+    Ts = read(file["Ts"])
+    spins = read(file["spins_$(index)"])
+    close(file)
+
+    return spins, Ts
+end

@@ -8,13 +8,13 @@ mu_B = 0.67*k_B # K/T to meV/T
 #------------------------------------------
 # set MC parameters
 #------------------------------------------
-N_therm = Int(2*10^4) #thermalization sweeps
+N_therm = Int(10^4) #thermalization sweeps
 N_det = Int(10^4) #deterministic sweeps
-N_meas = Int(2*10^4) #measurement sweeps
+N_meas = Int(10^4) #measurement sweeps
 probe_rate = Int(100) #number of sweeps between measurements, larger reduces autocorrelation between samples
 overrelax_rate = Int(10) #ratio of overrelax sweeps to metropolis sweeps
 replica_exchange_rate = Int(50) #how many sweeps between replica exchanges
-optimize_temperature_rate = Int(2000)
+optimize_temperature_rate = Int(10^6)
 
 #------------------------------------------
 # set lattice parameters 
@@ -25,14 +25,17 @@ S = 0.5
 #------------------------------------------
 # set Zeeman coupling parameters
 #------------------------------------------
-h_strength = 1.0
-h = h_strength*[1,1,1]/sqrt(3) #magnetic field in global frame
+h_strength = 3.0
+h_direction = [1,1,1]/sqrt(3)
+h = h_strength*h_direction #magnetic field in global frame
 
+delta_12 = [0.0, 0.0] #no quadratic Zeeman field
+disorder_strength = 0.0 #Gamma parameter in Lorentzian distribution
 #------------------------------------------
 # set interaction parameters in K
 #------------------------------------------
 
-Js = [3.0, -0.5, 0.04, 0.0]
+Js = [1.0, 1.0, 0.05, 0.0]
 
 #------------------------------------------
 # for parallel tempering: set min and max rank temperatures in units of K
