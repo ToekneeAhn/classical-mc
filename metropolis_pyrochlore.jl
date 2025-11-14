@@ -1,4 +1,4 @@
-using LinearAlgebra, StaticArrays, BinningAnalysis, Random, Interpolations, ForwardDiff, Integrals
+using LinearAlgebra, StaticArrays, BinningAnalysis, Random, Interpolations, ForwardDiff, Integrals, Printf
 
 include("observables.jl")
 
@@ -33,6 +33,7 @@ mutable struct SpinSystem
     N_sites::Int64 #total number of sites in lattice
     Js::Vector{Float64} #exchange parameters
     h::Vector{Float64} #external field
+    delta_12::Vector{Float64} #quadratic zeeman field coupling
     disorder_strength::Float64 #Gamma parameter in Lorentzian distribution
     H_bond::SArray{Tuple{4,4,3,3},Float64}
     neighbours::Vector{NTuple{6,Int64}}
@@ -149,7 +150,7 @@ function H_matrix_all(Js::Vector{Float64})::SArray{Tuple{4,4,3,3},Float64}
     return SArray{Tuple{4,4,3,3},Float64}(reinterpret(Float64, real(H_bond)))
 end
 
-function zeeman_field_random(h, z_local, local_interactions, delta_12, G, N_sites, seed=123)::Vector{NTuple{3,Float64}}
+function zeeman_field_random(h, z_local, local_interactions, delta_12, G, N_sites, seed=123, breaking_field=[zeros(3), zeros(3), zeros(3), zeros(3)])::Vector{NTuple{3,Float64}}
     Random.seed!(seed)
     
     zeeman_eff = NTuple{3,Float64}[]
@@ -157,6 +158,7 @@ function zeeman_field_random(h, z_local, local_interactions, delta_12, G, N_site
         h_z = (h' * z_local[:, mu]) .* local_interactions[:, mu]
         h_mu = local_bases[mu]' * h
         h_xy_quadratic = delta_12[1] .* (h_mu[1] * h_mu[3], h_mu[2] * h_mu[3], 0.0) .+ delta_12[2] .* (h_mu[2]^2 - h_mu[1]^2, 2.0 *h_mu[1] * h_mu[2], 0.0)
+        h_xy_breaking = breaking_field[mu]
 
         for n in 1:N_sites/4
             random_strength = G*tan(pi*(rand()-0.5)) #draws from a lorentzian distribution with pdf p(h) = G/pi * 1/(G^2+h^2)
@@ -164,7 +166,7 @@ function zeeman_field_random(h, z_local, local_interactions, delta_12, G, N_site
 
             h_xy_random = random_strength .* (cos(random_phase), sin(random_phase), 0.0)
             
-            push!(zeeman_eff, Tuple(h_z .+ h_xy_quadratic .+ h_xy_random))
+            push!(zeeman_eff, Tuple(h_z .+ h_xy_quadratic .+ h_xy_random .+ h_xy_breaking))
         end
     end
     #vector of tuples is faster to index into later
@@ -289,7 +291,7 @@ function overrelax_pyro!(spins::Array{Float64,2}, H_bond::SArray{Tuple{4,4,3,3},
 end
 
 #simulated annealing with overrelaxation for N_therm sweeps, then deterministic updates for N_det sweeps
-function sim_anneal!(mc::Simulation, T_i::Float64, schedule::Function)    
+function sim_anneal!(mc::Simulation, schedule::Function, output_temp::Vector{Float64}=Float64[], print_progress::Bool=true)
     N_therm = mc.parameters.N_therm
     N_det = mc.parameters.N_det
     overrelax_rate = mc.parameters.overrelax_rate
@@ -301,16 +303,36 @@ function sim_anneal!(mc::Simulation, T_i::Float64, schedule::Function)
     H_bond = mc.spin_system.H_bond
     neighbours = mc.spin_system.neighbours
     zeeman = mc.spin_system.zeeman_field
-    
+
     accept_count = [0]
+    N_output_temp = length(output_temp)
+    output_configurations = Array{Matrix{Float64}}(undef, N_output_temp)
     
     #metropolis + overrelaxation
-    t = 0
-    T = T_i 
+    T = schedule(0) 
     T_f = mc.T #set the T parameter to the target temp
-
+    
+    t0 = 0
+    T_schedule = Float64[]
     while T > T_f
-        T = T_i*schedule(t) #assume schedule(0)=1
+        T = schedule(t0)
+        push!(T_schedule, T)
+        t0 += 1
+    end
+
+    sort!(append!(T_schedule, output_temp), rev=true)    
+    energies_therm = similar(T_schedule)
+    
+    output_count = 1
+    output_temp_rev = sort(output_temp, rev=true)
+    
+    save_ind = similar(output_temp_rev, Int64)
+    for tt in eachindex(output_temp_rev)
+	    save_ind[tt] = argmin(abs.(T_schedule .- output_temp_rev[tt]))
+    end
+    println("Metropolis acceptance rate:")
+    for t in eachindex(T_schedule)
+        T = T_schedule[t]
         for sweep in 1:N_therm
             if sweep % overrelax_rate == 0
                 metropolis!(mc.spin_system.spins, accept_count, S, H_bond, neighbours, zeeman, N, T)
@@ -319,66 +341,75 @@ function sim_anneal!(mc::Simulation, T_i::Float64, schedule::Function)
             end
         end
 
-        println("acceptance rate at T=", T, ": ", accept_count[1]/(N_sites*N_therm/overrelax_rate)*100, "%")
+        if print_progress
+            @printf("T=%.6f: %.3f%%\n", T, accept_count[1]/(N_sites*N_therm/overrelax_rate)*100)
+        end
         accept_count = [0] 
 
-        t += 1
+        energies_therm[t] = E_pyro(mc.spin_system.spins, H_bond, neighbours, zeeman, N)
+
+        #save spin configuration
+        if t in save_ind           
+            output_configurations[N_output_temp - output_count + 1] = copy(mc.spin_system.spins)
+            output_count += 1
+        end
     end
     
-    for sweep in 1:N_det        
+    for _ in 1:N_det        
         det_update!(mc.spin_system.spins, S, H_bond, neighbours, zeeman, N)    
     end        
     
-    #each simulated annealing run constitues one measurement (at the end)
+    #each simulated annealing run constitutes one measurement (at the end)
     E = E_pyro(mc.spin_system.spins, H_bond, neighbours, zeeman, N)
     avg_spin = spin_expec(mc.spin_system.spins, N)
     m = norm(magnetization_global(avg_spin, local_bases, mc.spin_system.h))
 
     push!(mc.observables.energy, E, E^2)
     push!(mc.observables.magnetization, m, m^2, m^4)
-    push!(mc.observables.avg_spin, avg_spin, avg_spin.^2)
+    push!(mc.observables.avg_spin, avg_spin, spin_expec(mc.spin_system.spins.^2, N))
 
-    #thermalization energies 
-    #return energies_therm
+    #thermalization energies and output configurations at requested temperatures
+    return energies_therm, output_configurations
 end
 
-function parallel_temper!(mc::Simulation, rank::Int64, temp::Vector{Float64})
+function parallel_temper!(mc::Simulation, rank::Int64, temp::Vector{Float64}, comm::MPI.Comm, comm_size::Int64)
     N_therm = mc.parameters.N_therm
     overrelax_rate = mc.parameters.overrelax_rate
     N_meas = mc.parameters.N_meas
     probe_rate = mc.parameters.probe_rate
     replica_exchange_rate = mc.parameters.replica_exchange_rate
     optimize_temperature_rate = mc.parameters.optimize_temperature_rate
-    
+
     N = mc.spin_system.N
     S = mc.spin_system.S
     
     H_bond = mc.spin_system.H_bond
     neighbours = mc.spin_system.neighbours
     zeeman = mc.spin_system.zeeman_field
-    
+
     N_ranks = length(temp)
     T = mc.T
     N_sweeps = N_therm + N_meas
     energies = zeros(N_sweeps)
     
-    accept_count_metropolis = [0] #counts successful metropolis updates
-    accept_count_swap = [0] #counts number of successful swaps
-    
+    accept_count_metropolis = [0] #counts successful metropolis steps (not currently outputted)
+    accept_count_swap = 0 #counts number of successful swaps
+
+    n_up = 0 #number of replicas going "up" through the temperature T
+    n_down = 0 #number of replicas going "down" through the temperature T
+
     if rank == 0
         mc.replica_label = "up"
     elseif rank == N_ranks-1
         mc.replica_label = "down"
     end
-
-    n_up = 0 #number of replicas going "up" through the temperature T
-    n_down = 0 #number of replicas going "down" through the temperature T
-    new_spins = similar(mc.spin_system.spins) #buffer for replica exchange
     
+    new_spins = copy(mc.spin_system.spins) #buffer for replica exchange
+
     for sweep in 1:N_sweeps
         n_up += (mc.replica_label == "up")
         n_down += (mc.replica_label == "down")
-
+        
         #do overrelaxation and metropolis with relative frequency overrelax_rate
         if sweep % overrelax_rate == 0
             metropolis!(mc.spin_system.spins, accept_count_metropolis, S, H_bond, neighbours, zeeman, N, T)
@@ -398,7 +429,7 @@ function parallel_temper!(mc::Simulation, rank::Int64, temp::Vector{Float64})
             push!(mc.observables.energy, E, E^2)
             push!(mc.observables.magnetization, m, m^2, m^4)
             push!(mc.observables.avg_spin, avg_spin, spin_expec(mc.spin_system.spins.^2, N))
-            
+
             for i in 1:3
                 for mu in 1:4
                     S_i_mu = avg_spin[i,mu]
@@ -409,12 +440,13 @@ function parallel_temper!(mc::Simulation, rank::Int64, temp::Vector{Float64})
 
         if sweep % replica_exchange_rate == 0
             #println(string(rank)*": it's time to swap!")
-            swap_type = div(sweep, replica_exchange_rate)%2            
-            new_spins, partner_replica_number, partner_label, accept_swap = replica_exchange!(mc.spin_system.spins, rank, E, mc.replica_number, mc.replica_label, temp, swap_type)
+            #alternate between swap_type 0 and swap_type 1
+            swap_type = div(sweep, replica_exchange_rate)%2
             
-            if accept_swap[1]
+            new_spins, partner_replica_number, partner_label, accepted = replica_exchange!(mc.spin_system.spins, rank, E, mc.replica_number, mc.replica_label, temp, swap_type, comm, comm_size)
+            
+            if accepted
                 mc.spin_system.spins .= copy(new_spins)
-                
                 mc.replica_number = partner_replica_number
                 mc.replica_label = partner_label
 
@@ -424,85 +456,103 @@ function parallel_temper!(mc::Simulation, rank::Int64, temp::Vector{Float64})
                 elseif rank == N_ranks - 1
                     mc.replica_label = "down"
                 end
+                accept_count_swap += 1
             end
-            accept_count_swap += accept_swap
-        end 
 
-        #=
-        #don't adjust temperatures while taking measurements
-        if sweep < N_therm && sweep % optimize_temperature_rate == 0
-            flow = n_up/(n_up + n_down)
-            temp .= feedback_optimize_temperature(temp, flow, rank, comm)
-            T = temp[rank+1]
-            mc.T = temp[rank+1]
-        end
-        =#
-        if sweep == N_therm
-            n_up = 0
-            n_down = 0
-        end
+            #don't update temperatures while taking measurements
+            #=
+            if sweep < N_therm && sweep % optimize_temperature_rate == 0
+                denom = n_up + n_down
+                flow = denom == 0 ? 0.0 : n_up / denom
+                temp .= feedback_optimize_temperature(temp, flow, rank, comm)
+                T = temp[rank+1]
+                mc.T = temp[rank+1]
+            end
+            =#
+            if sweep == N_therm
+                n_up = 0
+                n_down = 0
+            end
+        end 
     end
-    
-    flow = n_up/(n_up + n_down)
-        
+
+    denom = n_up + n_down
+    flow = denom == 0 ? 0.0 : n_up / denom
+    fname = replace(pwd(), "\\" => "/") * "/pt_out/E_final_" * string(rank) * ".txt"
+    output_data = "rank $(rank) at T=$(T)\nE=" * string(energies[end]) * "\n" * mc.replica_label
+    write(fname, output_data)
+
     return energies, accept_count_metropolis, accept_count_swap, flow
 end
 
-function swap_adjacent!(arr::AbstractArray, rank::Int64, partner_rank::Int64, swap_type::Int64, comm::MPI.Comm)
-    buffer = similar(arr)
-    #prevents edge case of (R-1,R) swap if swap_type=1
-    if rank%2 == swap_type && partner_rank < comm_size 
-        MPI.send(arr, comm, dest=partner_rank)
-        buffer = MPI.recv(comm, source=partner_rank)
+function swap_adjacent!(arr::AbstractArray, rank::Int64, partner_rank::Int64, swap_type::Int64, comm::MPI.Comm, comm_size::Int64)
+    # No-op if partner is out of range
+    if partner_rank < 0 || partner_rank >= comm_size
+        return arr
     end
-    #prevents edge case of (-1,0) swap if swap_type=1
-    if rank%2 == 1-swap_type && partner_rank >= swap_type 
-        buffer = MPI.recv(comm, source=partner_rank)
-        MPI.send(arr, comm, dest=partner_rank)
-    end
-    arr .= copy(buffer)
 
+    buffer = similar(arr)
+    # Complementary ordering to avoid deadlock
+    if rank % 2 == swap_type
+        MPI.send(arr, comm, dest=partner_rank)
+        buffer .= MPI.recv(comm, source=partner_rank)
+    else
+        buffer .= MPI.recv(comm, source=partner_rank)
+        MPI.send(arr, comm, dest=partner_rank)
+    end
+
+    # copy into original array (preserve shape)
+    arr .= buffer
     return arr
 end
-#do this each iteration of the loop (i.e. when it's time to try swapping)
-function replica_exchange!(spins::Array{Float64,2}, rank::Int64, E_rank::Float64, replica_number::Int64, replica_label::String, temp::Vector{Float64}, swap_type::Int64)
-    #swap_type=0 pairs (01)(23)..., swap_type=1 pairs 0(12)(34)...
-    
-    partner_rank = iseven(rank) ? rank+(-1)^swap_type : rank-(-1)^swap_type
-    accept_arr = [false]
-    
-    #buffers
-    partner_replica_number = [-1]
-    partner_replica_label = ["none"]
 
-    #get partner energy and compute delta_E, delta_beta
-    if rank%2 == swap_type && partner_rank < comm_size 
+#do this each iteration of the loop (i.e. when it's time to try swapping)
+function replica_exchange!(spins::Array{Float64,2}, rank::Int64, E_rank::Float64, replica_number::Int64, replica_label::String, temp::Vector{Float64}, swap_type::Int64, comm::MPI.Comm, comm_size::Int64)
+    # determine partner (pairs: swap_type=0 -> (0,1)(2,3)..., swap_type=1 -> (1,2)(3,4)...)
+    partner_rank = (rank % 2 == swap_type) ? rank + 1 : rank - 1
+
+    # If partner out of range, no swap
+    if partner_rank < 0 || partner_rank >= comm_size
+        return spins, replica_number, replica_label, false
+    end
+
+    # exchange energies with complementary ordering (to avoid deadlock)
+    if rank % 2 == swap_type
+        MPI.send(E_rank, comm, dest=partner_rank)
         E_partner = MPI.recv(comm, source=partner_rank)
         delta_E = E_partner - E_rank
-        delta_beta = 1/temp[partner_rank+1] - 1/temp[rank+1]
-    elseif rank%2 == 1-swap_type && partner_rank >= swap_type
+        delta_beta = 1.0/temp[partner_rank+1] - 1.0/temp[rank+1]
+    else
+        E_partner = MPI.recv(comm, source=partner_rank)
         MPI.send(E_rank, comm, dest=partner_rank)
+        # other side does not need delta_E/delta_beta
+        delta_E = nothing
+        delta_beta = nothing
     end
 
-    #decide if swapping
-    if rank%2 == swap_type && partner_rank < comm_size 
-        accept_prob = exp(delta_beta*delta_E)
-        if rand() < accept_prob
-            accept_arr[1] = true
-        end        
-        MPI.send(accept_arr, comm, dest=partner_rank)
-    elseif rank%2 == 1-swap_type && partner_rank >= swap_type
-        accept_arr = MPI.recv(comm, source=partner_rank)
+    # decide acceptance (only the side that computed delta evaluates)
+    accept = false
+    if rank % 2 == swap_type
+        accept_prob = exp(delta_beta * delta_E)
+        
+        accept = rand() < accept_prob
+        MPI.send(accept, comm, dest=partner_rank)
+    else
+        accept = MPI.recv(comm, source=partner_rank)
     end
 
-    #it's time for the swap!
-    if accept_arr[1]    
-        spins = swap_adjacent!(spins, rank, partner_rank, swap_type, comm)
-        partner_replica_number = swap_adjacent!([replica_number], rank, partner_rank, swap_type, comm)
-        partner_replica_label = swap_adjacent!([replica_label], rank, partner_rank, swap_type, comm)
+    # perform swap if accepted (both sides must do this)
+    if accept
+        spins = swap_adjacent!(spins, rank, partner_rank, swap_type, comm, comm_size)
+
+        # swap replica_number and label through the same helper
+        partner_replica_number = swap_adjacent!([replica_number], rank, partner_rank, swap_type, comm, comm_size)[1]
+        partner_replica_label = swap_adjacent!([replica_label], rank, partner_rank, swap_type, comm, comm_size)[1]
+
+        return spins, partner_replica_number, partner_replica_label, true
     end
 
-    return spins, partner_replica_number[1], partner_replica_label[1], accept_arr
+    return spins, replica_number, replica_label, false
 end
 
 function feedback_optimize_temperature(temp::Vector{Float64}, flow::Float64, rank::Int64, comm::MPI.Comm)

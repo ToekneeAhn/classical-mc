@@ -1,14 +1,14 @@
 using HDF5, StaticArrays
 
 #writes an array to an hdf5 file, with key keyname
-function write_single(path, arr, keyname="spins")
+function write_single(path::String, arr::AbstractArray, keyname="spins")
     file = h5open(path, "w") 
     file[keyname] = arr 
     close(file)
 end
 
 #writes everything except measurements to a file
-function write_all(path, mc::Simulation)
+function write_all(path::String, mc::Simulation)
     file = h5open(path, "w") 
 
     for key in fieldnames(SpinSystem)
@@ -30,7 +30,7 @@ function write_all(path, mc::Simulation)
 end
 
 #writes measurements to a file
-function write_observables(path, mc::Simulation)
+function write_observables(path::String, mc::Simulation)
     obs = mc.observables
     file = h5open(path, "w")
     
@@ -60,8 +60,6 @@ function write_observables(path, mc::Simulation)
     close(file)
 end
 
-
-
 #collects h sweep data from all ranks and all h points into one file, as well as simulation parameters
 function collect_hsweep(results_dir::String, file_prefix::String, save_dir::String, system::SpinSystem, params::MCParams, temps::Vector{Float64}, h_direction::Vector{Float64}, h_sweep::Vector{Float64}, seed::Int64)
     raw_files = readdir(results_dir, join=false, sort=false)
@@ -77,6 +75,7 @@ function collect_hsweep(results_dir::String, file_prefix::String, save_dir::Stri
     param_gr["S"] = system.S
     param_gr["Js"] = system.Js
     param_gr["Ts"] = temps
+    param_gr["delta_12"] = system.delta_12
     param_gr["h_direction"] = h_direction
     param_gr["h_sweep"] = h_sweep
     param_gr["disorder_strength"] = system.disorder_strength
@@ -124,73 +123,42 @@ function collect_hsweep(results_dir::String, file_prefix::String, save_dir::Stri
             gr[obs] = collect_group(obs, obs_dim, rank)
         end
     end
-        
-        #=
-        mag = zeros(N_h)
-        mag_err = zeros(N_h)
-        energy = zeros(N_h)
-        energy_err = zeros(N_h)
-        avg_spin = zeros(N_h, 3, 4)
-        avg_spin_err = zeros(N_h, 3, 4)
-        avg_spin_squared = zeros(N_h, 3, 4)
-        avg_spin_squared_err = zeros(N_h, 3, 4)
-        spec_heat = zeros(N_h)
-        spec_heat_err = zeros(N_h)
-        susc = zeros(N_h)
-        susc_err = zeros(N_h)
-        binder = zeros(N_h)
-        binder_err = zeros(N_h)
-        ES_cov = zeros(N_h, 3, 4)
-        ES_cov_err = zeros(N_h, 3, 4)
 
-        for n in 1:N_h
-            fname = file_prefix*"$(n)_$(rank).h5"
-            
-            if fname in raw_files
-                fid=h5open(joinpath(results_dir,fname),"r")
-
-                mag[n] = read(fid["magnetization"])
-                mag_err[n] = read(fid["magnetization_err"])
-                energy[n] = read(fid["energy"])
-                energy_err[n] = read(fid["energy_err"])
-                avg_spin[n,:,:] = read(fid["avg_spin"])
-                avg_spin_err[n,:,:] = read(fid["avg_spin_err"])
-                avg_spin_squared[n,:,:] = read(fid["avg_spin_squared"])
-                avg_spin_squared_err[n,:,:] = read(fid["avg_spin_squared_err"])
-                spec_heat[n] = read(fid["specific_heat"])
-                spec_heat_err[n] = read(fid["specific_heat_err"])
-                susc[n] = read(fid["susceptibility"])
-                susc_err[n] = read(fid["susceptibility_err"])
-                binder[n] = read(fid["binder"])
-                binder_err[n] = read(fid["binder_err"])
-                ES_cov[n,:,:] = read(fid["dMdT"])
-                ES_cov_err[n,:,:] = read(fid["dMdT_err"])
-                
-                close(fid)
-            else
-                println("file $(n) not found!")
-            end 
-        end
-
-        #all as a function of magnetic field h
-        gr = create_group(file, "rank_$(rank)")
-        gr["magnetization"] = mag
-        gr["magnetization_err"] = mag_err
-        gr["energy"] = energy
-        gr["energy_err"] = energy_err
-        gr["avg_spin"] = avg_spin
-        gr["avg_spin_err"] = avg_spin_err
-        gr["avg_spin_squared"] = avg_spin_squared
-        gr["avg_spin_squared_err"] = avg_spin_squared_err
-        gr["specific_heat"] = spec_heat
-        gr["specific_heat_err"] = spec_heat_err
-        gr["susceptibility"] = susc
-        gr["susceptibility_err"] = susc_err
-        gr["binder"] = binder
-        gr["binder_err"] = binder_err
-        gr["dMdT"] = ES_cov
-        gr["dMdT_err"] = ES_cov_err
-    end
-    =#
     close(file)
+end
+
+#saves configurations at various temperatures generated from a single simulated annealing run
+function write_collection_sim_anneal(path::String, configurations_save::Vector{Matrix{Float64}}, params::MCParams, system::SpinSystem, temp_save::Vector{Float64}, h_direction::Vector{Float64}, h_sweep::Vector{Float64}, seed::Int64)
+    file = h5open(path, "w")
+
+    param_gr = create_group(file, "parameters")
+    param_gr["N_therm"] = params.N_therm
+    param_gr["overrelax_rate"] = params.overrelax_rate
+    param_gr["N_meas"] = params.N_meas
+    param_gr["probe_rate"] = params.probe_rate
+    param_gr["replica_exchange_rate"] = params.replica_exchange_rate
+    param_gr["N"] = system.N
+    param_gr["S"] = system.S
+    param_gr["Js"] = system.Js
+    param_gr["h_direction"] = h_direction
+    param_gr["h_sweep"] = h_sweep
+    param_gr["disorder_strength"] = system.disorder_strength
+    param_gr["disorder_seed"] = seed
+
+    file["Ts"] = temp_save
+
+    for i in eachindex(temp_save)
+        file["spins_$(i)"] = configurations_save[i]
+    end
+    
+    close(file)
+end
+
+function read_configuration_hdf5(path::String, index::Int64)
+    file = h5open(path, "r")
+    Ts = read(file["Ts"])
+    spins = read(file["spins_$(index)"])
+    close(file)
+
+    return spins, Ts
 end

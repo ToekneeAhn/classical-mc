@@ -1,0 +1,72 @@
+#system parameters
+N_uc: 6 #number of unit cells
+S: 0.5 #spin length
+Js: #exchange coupling constants
+  - 3.6
+  - -0.6
+  - 0.01
+  - 0.0
+#external magnetic field parameters
+h_theta: 0.0 #magnetic field angle between [111] and [1-10] directions (degrees)
+h_sweep_args:
+  - 0.0
+  - 40.0
+N_h: 96
+delta_12: #quadratic zeeman coupling constants
+  - 0.002
+  - 0.002
+#
+breaking_field: [[0.0, 0.0, 0.0], [0.0, -0.0, 0.0], [-0.0, 0.0, 0.0], [-0.0, 0.0, 0.0]] #list of 4 vectors for small symmetry breaking fields on each sublattice site
+#
+#for theta>0
+#breaking_field: [[0.0, 0.0, 0.0], [0.001, -0.001, 0.0], [-0.001, 0.001, 0.0], [-0.001, 0.001, 0.0]] #list of 4 vectors for small symmetry breaking fields on each sublattice site
+#for theta<0
+#breaking_field: [[0.0, 0.0, 0.0], [-0.001, -0.001, 0.0], [0.001, 0.001, 0.0], [-0.001, -0.001, 0.0]] #list of 4 vectors for small symmetry breaking fields on each sublattice site
+#
+#disorder (random transverse field) parameters
+disorder_strength: 0.0
+disorder_seed: 123456
+#monte carlo simulation parameters
+sim_anneal:
+  job:
+    time: "1:00:00"
+    mem_per_cpu: "750M"
+    job_name: "zoom_theta=0.0"
+  file_prefix: "Jzz=3.6_zoom_hhltheta=0.0_h"
+  results_dir: "../sim_anneal_out" #temporary storage
+  save_dir: "../theta_sweep" #final storage
+  mc_params:
+    N_therm: 200000
+    overrelax_rate: 10
+    N_det: 1000000
+  T_args: #temperature schedule
+    - 0.00001
+    - 1.0
+  #save configurations at low T for use as initial conditions
+  save_configs: false
+  T_save_args:
+    - 0.0002
+    - 0.5
+  N_save: 48
+  save_configs_prefix: "../pt_collect/save_config/Jpm=0_Jpmpm+_h"
+parallel_temper:
+  job:
+    time: "2:00:00"
+    mem_per_cpu: "1G"
+    job_name: "Jpm+_Jpmpm-_measure_pt"
+  mc_params:
+    N_therm: 4000
+    overrelax_rate: 1
+    N_meas: 4000
+    probe_rate: 100
+    replica_exchange_rate: 50
+    optimize_temperature_rate: 20000000
+  load_configs: true #load saved temperatures and configurations
+  load_configs_prefix: "../pt_collect/save_config/Jpm+_Jpmpm-_h"
+  T_args: #otherwise use the following temperature range with NTs ranks
+    - 0.03
+    - 0.5
+  N_Ts: 96
+  file_prefix: "measure_Jpm+_Jpmpm-_h"
+  results_dir: "../pt_out" #temporary storage
+  save_dir: "../pt_collect" #final storage
