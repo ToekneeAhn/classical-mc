@@ -1,4 +1,5 @@
-using LinearAlgebra, StaticArrays, BinningAnalysis, Random, MPI, Interpolations, ForwardDiff, Integrals, Printf
+using LinearAlgebra, StaticArrays, BinningAnalysis, Random, MPI
+using Interpolations, ForwardDiff, Integrals, Printf 
 
 include("observables.jl")
 
@@ -37,9 +38,25 @@ mutable struct SpinSystem
     disorder_strength::Float64 #Gamma parameter in Lorentzian distribution
     neighbours::Vector{NTuple{6,Int64}}
     H_bilinear::Vector{NTuple{6, SArray{Tuple{3,3},Float64,2,9}}}
-    #cubic_sites::Vector{NTuple{N3,NTuple{3,Int64}}} #list of cubic interaction site tuples for each site
-    #H_cubic::SArray{Tuple{3,3,3},Float64} #assume a cubic interaction with no position-dependence
+    K::Complex{Float64} #cubic interaction parameter
+    cubic_sites::Vector{NTuple{90,NTuple{3,Int64}}} #list of cubic interaction site tuples for each site
+    H_cubic::Vector{NTuple{90,SArray{Tuple{3,3,3},Float64,3,27}}} #cubic interaction tensors for each cubic triplet
+    # Pre-split cubic interaction lists by the role of the central site (for branch-free local field)
+    cubic_pairs_i::Vector{NTuple{30,NTuple{2,Int64}}} # for site n as first index: store (j,k)
+    cubic_pairs_j::Vector{NTuple{30,NTuple{2,Int64}}} # for site n as second index: store (i,k)
+    cubic_pairs_k::Vector{NTuple{30,NTuple{2,Int64}}} # for site n as third index: store (i,j)
     zeeman_field::Vector{NTuple{3,Float64}}
+end
+
+#constructor without cubic interactions
+function SpinSystem(spins, S, N, N_sites, Js, h, delta_12, disorder_strength, neighbours, H_bilinear, zeeman_field)
+    empty_triplets = Vector{NTuple{90,NTuple{3,Int64}}}()   
+    empty_pairs = Vector{NTuple{30,NTuple{2,Int64}}}()   
+    empty_H_cubic = Vector{NTuple{90,SArray{Tuple{3,3,3},Float64,3,27}}}()
+    empty_K = 0 + 0im
+    return SpinSystem(spins, S, N, N_sites, Js, h, delta_12, disorder_strength,
+                      neighbours, H_bilinear, empty_K, empty_triplets, empty_H_cubic,
+                      empty_pairs, empty_pairs, empty_pairs, zeeman_field)
 end
 
 #monte carlo simulation parameters
@@ -107,7 +124,106 @@ function neighbours_pyro(n::Int64, N::Int64)::NTuple{6,Int64}
     return Tuple(neighbours_flat)
 end
 
-function neighbours_all(N, N_sites)
+function cubic_sites_pyro(i::Int64, N::Int64)::NTuple{90,NTuple{3,Int64}}
+    neigh_i = neighbours_pyro(i, N)                # 6 neighbours of i
+    role_first  = NTuple{3,Int64}[]                # (i, j, k)
+    role_second = NTuple{3,Int64}[]                # (j, i, j2)
+    role_third  = NTuple{3,Int64}[]                # (k, j, i)
+
+    sizehint!(role_first, 30)
+    sizehint!(role_second, 30)
+    sizehint!(role_third, 30)
+
+    # Collect endpoint and middle triplets separately
+    @inbounds for j in neigh_i
+        neigh_j = neighbours_pyro(j, N)
+        # i as first and third positions (endpoint triplets)
+        @inbounds for k in neigh_j
+            if k != i
+                push!(role_first,  (i, j, k))   # i first
+                push!(role_third,  (k, j, i))   # i third
+            end
+        end
+        # i as second position (middle triplets)
+        @inbounds for j2 in neigh_i
+            if j2 != j
+                push!(role_second, (j, i, j2))  # i second
+            end
+        end
+    end
+
+    @assert length(role_first)  == 30
+    @assert length(role_second) == 30
+    @assert length(role_third)  == 30
+
+    all_triplets = vcat(role_first, role_second, role_third)
+    return Tuple(all_triplets)::NTuple{90,NTuple{3,Int64}}
+end 
+
+function cubic_sites_all(N::Int64, N_sites::Int64)
+    cubic_sites = Vector{NTuple{90,NTuple{3,Int64}}}(undef, N_sites)
+
+    for n in 1:N_sites
+        cubic_sites[n] = cubic_sites_pyro(n, N)
+    end
+
+    return cubic_sites
+end
+
+"""
+    cubic_pairs_split_all(cubic_sites, N_sites)
+
+Split each site's 90 cubic triplets into three role-specific lists of 30 pairs:
+ - cubic_pairs_i[n]: pairs (j,k) when triplet is (n,j,k)
+ - cubic_pairs_j[n]: pairs (i,k) when triplet is (i,n,k)
+ - cubic_pairs_k[n]: pairs (i,j) when triplet is (i,j,n)
+"""
+function cubic_pairs_split_all(cubic_sites::Vector{NTuple{90,NTuple{3,Int64}}}, N_sites::Int64)
+    pairs_i = Vector{NTuple{30,NTuple{2,Int64}}}(undef, N_sites)
+    pairs_j = Vector{NTuple{30,NTuple{2,Int64}}}(undef, N_sites)
+    pairs_k = Vector{NTuple{30,NTuple{2,Int64}}}(undef, N_sites)
+    
+    for n in 1:N_sites
+        cs = cubic_sites[n]
+        pairs_i[n] = Tuple([triplet[2:3] for triplet in cs[1:30]])
+        pairs_j[n] = Tuple([ (triplet[1],triplet[3]) for triplet in cs[31:60]])
+        pairs_k[n] = Tuple([triplet[1:2] for triplet in cs[61:90]])
+    end
+    
+    return pairs_i, pairs_j, pairs_k
+end
+
+function cubic_tensors_all(K::Complex{Float64}, N::Int64, N_sites::Int64)::Vector{NTuple{90,SArray{Tuple{3,3,3}, Float64, 3, 27}}}
+    cubic_tensors = Vector{NTuple{90,SArray{Tuple{3,3,3}, Float64, 3, 27}}}(undef, N_sites)
+    for n in 1:N_sites
+        cubic_sites_n = cubic_sites_pyro(n, N)
+        cubic_tensors_n = SArray{Tuple{3,3,3}, Float64, 3, 27}[]
+
+        for triplet in cubic_sites_n
+            K_cubic = zeros(3,3,3)
+            
+            i, j, k = triplet
+            sub_i = get_sublattice(i, N)
+            sub_j = get_sublattice(j, N)
+            sub_k = get_sublattice(k, N)
+
+            phase = gamma_ij[sub_i, sub_j] * gamma_ij[sub_j, sub_k] #i hope this is correct lol
+            
+            K_cubic[3,1,3] = 2*real(K * phase)
+            K_cubic[3,2,3] = -2*imag(K * phase)
+            
+            #there should be 3 indepdendent constants (K1, K2, K3) for the three independent types of "trimers" 
+            #assume they are the same for now
+            push!(cubic_tensors_n, SArray{Tuple{3,3,3}, Float64, 3, 27}(K_cubic))
+        end
+
+        cubic_tensors[n] = Tuple(cubic_tensors_n)
+    end
+
+    return cubic_tensors
+end
+
+function neighbours_all(N::Int64, N_sites::Int64)
     coord_num = 6
     
     neighbours = NTuple{coord_num, Int64}[]
@@ -186,48 +302,181 @@ function zeeman_field_random(h, z_local, local_interactions, delta_12, G, N_site
     return zeeman_eff
 end
 
-function local_field_pyro(sys::SpinSystem, n::Int64)::NTuple{3,Float64}
-    neighbours = sys.neighbours[n]
-    H_bilinear_n = sys.H_bilinear[n]
-    
-    #avoid matrix multiplication for performance purposes
-    Hx=0.0
-    Hy=0.0
-    Hz=0.0
-    
+@inline function local_field_pyro(sys::SpinSystem, n::Int64)::NTuple{3,Float64}
     @inbounds begin
-        for m in eachindex(neighbours)
-            sx, sy, sz = get_spin(sys.spins, neighbours[m])
-            
-            H_ij = H_bilinear_n[m]
-            Hx += H_ij[1,1] * sx + H_ij[1,2] * sy + H_ij[1,3] * sz
-            Hy += H_ij[2,1] * sx + H_ij[2,2] * sy + H_ij[2,3] * sz
-            Hz += H_ij[3,1] * sx + H_ij[3,2] * sy + H_ij[3,3] * sz
-        end
-    end
+        neighs = sys.neighbours[n]          # NTuple{6,Int}
+        Hs     = sys.H_bilinear[n]          # NTuple{6, SMatrix{3,3}}
+        S      = sys.spins                  # 3×N_sites matrix
 
-    h_z = sys.zeeman_field[n]
-    return (Hx-h_z[1], Hy-h_z[2], Hz-h_z[3])
+        Hx = 0.0; Hy = 0.0; Hz = 0.0
+
+        # Fixed degree: 6 neighbours. Use literal indices for SMatrix getindex.
+        for k in eachindex(neighs)
+            m  = neighs[k]
+            sx = S[1, m]; sy = S[2, m]; sz = S[3, m]
+            H  = Hs[k]
+
+            h11 = H[1,1]; h12 = H[1,2]; h13 = H[1,3]
+            h21 = H[2,1]; h22 = H[2,2]; h23 = H[2,3]
+            h31 = H[3,1]; h32 = H[3,2]; h33 = H[3,3]
+
+            Hx += h11*sx + h12*sy + h13*sz
+            Hy += h21*sx + h22*sy + h23*sz
+            Hz += h31*sx + h32*sy + h33*sz
+        end
+
+        # Cubic part (kept as-is, but bounds checks off)
+        if !isempty(sys.H_cubic)            
+            H_cubic = sys.H_cubic[n]
+
+            pairs_i = sys.cubic_pairs_i[n]
+            pairs_j = sys.cubic_pairs_j[n]
+            pairs_k = sys.cubic_pairs_k[n]
+
+            for p in eachindex(pairs_i)
+                K = H_cubic[p]
+                j, k = pairs_i[p]
+                Sj1 = S[1, j]; Sj2 = S[2, j]; Sj3 = S[3, j]
+                Sk1 = S[1, k]; Sk2 = S[2, k]; Sk3 = S[3, k]
+                # c=1
+                Hx += (K[1,1,1]*Sj1 + K[1,2,1]*Sj2 + K[1,3,1]*Sj3) * Sk1
+                Hy += (K[2,1,1]*Sj1 + K[2,2,1]*Sj2 + K[2,3,1]*Sj3) * Sk1
+                Hz += (K[3,1,1]*Sj1 + K[3,2,1]*Sj2 + K[3,3,1]*Sj3) * Sk1
+                # c=2
+                Hx += (K[1,1,2]*Sj1 + K[1,2,2]*Sj2 + K[1,3,2]*Sj3) * Sk2
+                Hy += (K[2,1,2]*Sj1 + K[2,2,2]*Sj2 + K[2,3,2]*Sj3) * Sk2
+                Hz += (K[3,1,2]*Sj1 + K[3,2,2]*Sj2 + K[3,3,2]*Sj3) * Sk2
+                # c=3
+                Hx += (K[1,1,3]*Sj1 + K[1,2,3]*Sj2 + K[1,3,3]*Sj3) * Sk3
+                Hy += (K[2,1,3]*Sj1 + K[2,2,3]*Sj2 + K[2,3,3]*Sj3) * Sk3
+                Hz += (K[3,1,3]*Sj1 + K[3,2,3]*Sj2 + K[3,3,3]*Sj3) * Sk3
+            end
+            
+            for p in eachindex(pairs_j)
+                K = H_cubic[p+30]
+                i, k = pairs_j[p]
+                Si1 = S[1, i]; Si2 = S[2, i]; Si3 = S[3, i]
+                Sk1 = S[1, k]; Sk2 = S[2, k]; Sk3 = S[3, k]
+                # c=1
+                Hx += (K[1,1,1]*Si1 + K[2,1,1]*Si2 + K[3,1,1]*Si3) * Sk1
+                Hy += (K[1,2,1]*Si1 + K[2,2,1]*Si2 + K[3,2,1]*Si3) * Sk1
+                Hz += (K[1,3,1]*Si1 + K[2,3,1]*Si2 + K[3,3,1]*Si3) * Sk1
+                # c=2
+                Hx += (K[1,1,2]*Si1 + K[2,1,2]*Si2 + K[3,1,2]*Si3) * Sk2
+                Hy += (K[1,2,2]*Si1 + K[2,2,2]*Si2 + K[3,2,2]*Si3) * Sk2
+                Hz += (K[1,3,2]*Si1 + K[2,3,2]*Si2 + K[3,3,2]*Si3) * Sk2
+                # c=3
+                Hx += (K[1,1,3]*Si1 + K[2,1,3]*Si2 + K[3,1,3]*Si3) * Sk3
+                Hy += (K[1,2,3]*Si1 + K[2,2,3]*Si2 + K[3,2,3]*Si3) * Sk3
+                Hz += (K[1,3,3]*Si1 + K[2,3,3]*Si2 + K[3,3,3]*Si3) * Sk3
+            end
+            
+            for p in eachindex(pairs_k)
+                K = H_cubic[p+60]
+                i, j = pairs_k[p]
+                Si1 = S[1, i]; Si2 = S[2, i]; Si3 = S[3, i]
+                Sj1 = S[1, j]; Sj2 = S[2, j]; Sj3 = S[3, j]
+                # c = 1 (Hx)
+                Hx += (K[1,1,1]*Si1 + K[2,1,1]*Si2 + K[3,1,1]*Si3) * Sj1
+                Hx += (K[1,2,1]*Si1 + K[2,2,1]*Si2 + K[3,2,1]*Si3) * Sj2
+                Hx += (K[1,3,1]*Si1 + K[2,3,1]*Si2 + K[3,3,1]*Si3) * Sj3
+                # c = 2 (Hy)
+                Hy += (K[1,1,2]*Si1 + K[2,1,2]*Si2 + K[3,1,2]*Si3) * Sj1
+                Hy += (K[1,2,2]*Si1 + K[2,2,2]*Si2 + K[3,2,2]*Si3) * Sj2
+                Hy += (K[1,3,2]*Si1 + K[2,3,2]*Si2 + K[3,3,2]*Si3) * Sj3
+                # c = 3 (Hz)
+                Hz += (K[1,1,3]*Si1 + K[2,1,3]*Si2 + K[3,1,3]*Si3) * Sj1
+                Hz += (K[1,2,3]*Si1 + K[2,2,3]*Si2 + K[3,2,3]*Si3) * Sj2
+                Hz += (K[1,3,3]*Si1 + K[2,3,3]*Si2 + K[3,3,3]*Si3) * Sj3
+            end
+            
+            #conceptually, the above code is equivalent to this comment block
+            #optimizations come from precompting the pairs (no if statements) and unrolling loops
+            
+            #=
+            H_cubic = sys.H_cubic[n]
+            
+            for (triplet_idx, triplet) in enumerate(sys.cubic_sites[n])
+                i, j, k = triplet
+                Si1 = S[1, i]; Si2 = S[2, i]; Si3 = S[3, i]
+                Sj1 = S[1, j]; Sj2 = S[2, j]; Sj3 = S[3, j]
+                Sk1 = S[1, k]; Sk2 = S[2, k]; Sk3 = S[3, k]
+                
+                Si = (Si1, Si2, Si3)
+                Sj = (Sj1, Sj2, Sj3)
+                Sk = (Sk1, Sk2, Sk3)
+
+                K = H_cubic[triplet_idx]
+                if i == n
+                    # n is i
+                    for a in 1:3, b in 1:3
+                        Hx += K[1,a,b]*Sj[a]*Sk[b]
+                        Hy += K[2,a,b]*Sj[a]*Sk[b]
+                        Hz += K[3,a,b]*Sj[a]*Sk[b]
+                    end
+                elseif j == n
+                    # n is j
+                    for a in 1:3, b in 1:3
+                        Hx += K[a,1,b]*Si[a]*Sk[b]
+                        Hy += K[a,2,b]*Si[a]*Sk[b]
+                        Hz += K[a,3,b]*Si[a]*Sk[b]
+                    end
+                    
+                elseif k == n
+                    # n is k
+                    for a in 1:3, b in 1:3
+                        Hx += K[a,b,1]*Si[a]*Sj[b]
+                        Hy += K[a,b,2]*Si[a]*Sj[b]
+                        Hz += K[a,b,3]*Si[a]*Sj[b]
+                    end
+                end
+            end
+            =#
+        end
+
+        h = sys.zeeman_field[n]
+        return (Hx - h[1], Hy - h[2], Hz - h[3])
+    end
 end
 
 function E_pyro(sys::SpinSystem)::Float64
-    E = 0.0
+    E_bilinear = 0.0
+    E_cubic = 0.0
+    E_zeeman = 0.0
     
     for n in 1:sys.N_sites
         #quadratic interaction, divide by 2 because each bond counted twice
         S_n = get_spin(sys.spins, n)
 
         for m in eachindex(sys.neighbours[n])
-            #use a view to avoid allocating an array
-            @inbounds E += 0.5 * dot(S_n, sys.H_bilinear[n][m] * view(sys.spins, :, sys.neighbours[n][m]))
+            S_m = get_spin(sys.spins, sys.neighbours[n][m])
+
+            E_bilinear += S_n[1] * sys.H_bilinear[n][m][1,1] * S_m[1] + S_n[1] * sys.H_bilinear[n][m][1,2] * S_m[2] + S_n[1] * sys.H_bilinear[n][m][1,3] * S_m[3]
+            E_bilinear += S_n[2] * sys.H_bilinear[n][m][2,1] * S_m[1] + S_n[2] * sys.H_bilinear[n][m][2,2] * S_m[2] + S_n[2] * sys.H_bilinear[n][m][2,3] * S_m[3]
+            E_bilinear += S_n[3] * sys.H_bilinear[n][m][3,1] * S_m[1] + S_n[3] * sys.H_bilinear[n][m][3,2] * S_m[2] + S_n[3] * sys.H_bilinear[n][m][3,3] * S_m[3] 
         end
 
+        if length(sys.cubic_sites) == 0
+            continue
+        end
+        #cubic contribution
+        for trimer in eachindex(sys.cubic_sites[n])
+            S_i = get_spin(sys.spins, sys.cubic_sites[n][trimer][1])
+            S_j = get_spin(sys.spins, sys.cubic_sites[n][trimer][2])
+            S_k = get_spin(sys.spins, sys.cubic_sites[n][trimer][3])
+            
+            K = sys.H_cubic[n][trimer]
+            for a in 1:3, b in 1:3, c in 1:3
+                E_cubic += K[a,b,c] * S_i[a] * S_j[b] * S_k[c]
+            end
+        end
+          
         #zeeman contribution
-        @inbounds E += - dot(sys.zeeman_field[n], S_n)
+        E_zeeman += - dot(sys.zeeman_field[n], S_n)
     end
     
     #total energy, not energy per site
-    return E
+    return E_bilinear/2.0 + E_cubic/3.0 + E_zeeman
 end
 
 function energy_difference_pyro(sys::SpinSystem, old_spin::NTuple{3,Float64}, n::Int64)::Float64
@@ -344,7 +593,7 @@ function sim_anneal!(mc::Simulation, schedule::Function, output_temp::Vector{Flo
         end
 
         if print_progress
-            @printf("T=%.6f: %.3f%%\n", T, accept_count[1]/(N_sites*N_therm/overrelax_rate)*100)
+            @printf("T=%.6f: %.3f%%\n", T, Float64(accept_count[1]/(N_sites*N_therm/overrelax_rate)*100))
         end
         accept_count = [0] 
 

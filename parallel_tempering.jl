@@ -8,43 +8,46 @@ include("input_file.jl")
 save_dir = replace(pwd(),"\\"=>"/")*"/"*ARGS[1]*"/"
 h_direction = ARGS[2] #comma-separated e.g. "1,1,1" or "1,1,0"
 h_direction = [parse(Int64, hh) for hh in split(h_direction,",")]
+h_index = 0
 #h_dir as a string with no spaces
 save_prefix = string(h_direction...) 
 h_direction /= norm(h_direction)
 seed=123
 
 if length(ARGS) == 3
-    #convert h_dir to a vector
-    h_index = parse(Int64, ARGS[3])
-    h_direction = [parse(Int64, hh) for hh in split(h_direction,",")]
-    #h_dir as a string with no spaces
-    save_prefix = string(h_direction...) 
-    h_direction /= norm(h_direction)
-    
-    #h field
-    h = h_sweep[h_index]*h_direction
+    load_configs_path = ARGS[3]
 else
-    h_index = "single"
+    load_configs_path = "none"
 end
-
 
 MPI.Init()
 comm = MPI.COMM_WORLD
 comm_size = MPI.Comm_size(comm)
 r = MPI.Comm_rank(comm)
 
-# create equal logarithmically spaced temperatures
-Ts = exp10.(range(log10(T_min), stop=log10(T_max), length=comm_size)) 
-
 #initial spin configuration 
-spins_r = spins_initial_pyro(N, S) 
+if load_configs_path != "none"
+    #load from hdf5 file
+    spins_r, Ts = read_configuration_hdf5(load_configs_path, r+1)
+else
+    spins_r = spins_initial_pyro(N, S) 
+    # create equal logarithmically spaced temperatures
+    Ts = exp10.(range(log10(T_min), stop=log10(T_max), length=comm_size)) 
+end
+
 N_sites = 4*N^3
-disorder_strength = 0.0 #in K
-quad_strength = [0.0,0.0]
-H_ij = H_matrix_all(Js)
-neighbours = neighbours_all(N_sites)
-zeeman = zeeman_field_random(h, z_local, local_interactions, quad_strength, disorder_strength, N_sites, seed)
-system = SpinSystem(spins_r, S, N, N_sites, Js, h, disorder_strength, H_ij, neighbours, zeeman)
+@assert size(spins_r, 2) == N_sites "Loaded spin configuration has incorrect number of sites"
+@assert length(Ts) == comm_size "Loaded temperature array has incorrect length"
+
+neighbours = neighbours_all(N, N_sites)
+H_bilinear = H_bilinear_all(Js, N, N_sites)
+cubic_sites = cubic_sites_all(N, N_sites)
+H_cubic = cubic_tensors_all(K, N, N_sites)
+pairs_i, pairs_j, pairs_k = cubic_pairs_split_all(cubic_sites, N_sites)
+
+zeeman = zeeman_field_random(h, z_local, local_interactions, delta_12, disorder_strength, N_sites, seed)
+system = SpinSystem(spins_r, S, N, N_sites, Js, h, delta_12, disorder_strength, neighbours, H_bilinear, K, cubic_sites, H_cubic, pairs_i, pairs_j, pairs_k, zeeman)
+
 params = MCParams(N_therm, -1, overrelax_rate, N_meas, probe_rate, replica_exchange_rate, optimize_temperature_rate)
 obs = Observables()
 simulation = Simulation(system, Ts[r+1], params, obs, r, "none") #T argument is needed for calculating observables
@@ -63,21 +66,11 @@ if r == 0
     total_swaps[end] /= 2
     total_metropolis = N_sites * (N_therm + N_meas)/overrelax_rate
     
-    println("final temperatures: ", Ts)
     for rr in 1:comm_size
         @printf("rank %d swap rate: %.1f%% \t|\t metropolis acceptance rate: %.1f%%\n", rr, 100 * gather_accept_swap[rr]/total_swaps[rr], 100 * gather_accept_metropolis[rr]/total_metropolis)
         @printf("rank %d autocorr time: %.0f \t|\t flow: %.2f \t|\t ideal flow: %.2f\n", rr, gather_tau[rr], gather_flow[rr], 1-(rr-1)/(comm_size-1))
     end
     
-    #=
-    println("dsdt ", dSdT(simulation)[1])
-    println("dsdt err ", dSdT(simulation)[2])
-    println("Js=", simulation.spin_system.Js)
-    println("h=", h)
-    println("rank 0 specific heat:", specific_heat(simulation))
-    println("rank 0 susceptibility:", susceptibility(simulation))  
-    =#
-
     #makes save directory if it doesn't exist
     if !isdir(save_dir)
         mkdir(save_dir)

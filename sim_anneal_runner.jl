@@ -1,27 +1,34 @@
-using Random, Plots
+using Random, Plots, BenchmarkTools
 
 include("metropolis_pyrochlore.jl") 
 include("write_hdf5.jl")
 include("input_file.jl")
 
-#single run
-T_i = 1.0 #initial temperatures
-T_f = 1e-4 #target temperature
-
 N_sites = 4*N^3
 #random initial configuration
 spins = spins_initial_pyro(N, S)
 
-H_bilinear = H_bilinear_all(Js, N, N_sites)
 neighbours = neighbours_all(N, N_sites)
+H_bilinear = H_bilinear_all(Js, N, N_sites)
+
+cubic_sites = cubic_sites_all(N, N_sites)
+pairs_i, pairs_j, pairs_k = cubic_pairs_split_all(cubic_sites, N_sites)
+H_cubic = cubic_tensors_all(K, N, N_sites)
+
 zeeman = zeeman_field_random(h, z_local, local_interactions, delta_12, disorder_strength, N_sites, 0)
 
-system = SpinSystem(spins, S, N, N_sites, Js, h, delta_12, disorder_strength, neighbours, H_bilinear, zeeman)
+if include_cubic
+    system = SpinSystem(spins, S, N, N_sites, Js, h, delta_12, disorder_strength, neighbours, H_bilinear, K, cubic_sites, H_cubic, pairs_i, pairs_j, pairs_k, zeeman)
+else
+    system = SpinSystem(spins, S, N, N_sites, Js, h, delta_12, disorder_strength, neighbours, H_bilinear, zeeman)
+end
+
 params = MCParams(N_therm, N_det, overrelax_rate, -1, -1, -1, -1)
 simulation = Simulation(system, T_f, params, Observables(), 0, "none") #set temperature to T_f to use in observables
 
 #simulated annealing with annealing schedule T = T_i*0.9^t
-temp_save = [0.001, 0.01, 0.011, 0.012, 0.05, 0.1, 0.5]
+#temp_save = [0.001, 0.01, 0.011, 0.012, 0.05, 0.1, 0.5]
+temp_save = Float64[]
 @time energies, configurations_save = sim_anneal!(simulation, t-> T_i * 0.9^t, temp_save, true)
 
 #plot energy as a function of sweep
@@ -35,7 +42,12 @@ xticks!([N^3, 2*N^3, 3*N^3, 4*N^3])
 vline!([N^3, 2*N^3, 3*N^3, 4*N^3].+0.5, linestyle=:dash, linecolor=:red, label="")
 display(scatter!(spins[3,:], label="Sz", ms=4))
 
-println(spin_expec(spins, N))
+S_avg = spin_expec(spins, N)
+println("Average spin per sublattice:")
+println("Sublattice 0: ", round.(S_avg[:,1], digits=4))
+println("Sublattice 1: ", round.(S_avg[:,2], digits=4))
+println("Sublattice 2: ", round.(S_avg[:,3], digits=4))
+println("Sublattice 3: ", round.(S_avg[:,4], digits=4))
 
 #save configurations to hdf5
 save_dir = "sim_anneal_collect"

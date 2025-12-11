@@ -69,7 +69,9 @@ function collect_hsweep(results_dir::String, file_prefix::String, save_dir::Stri
     param_gr["N"] = system.N
     param_gr["S"] = system.S
     param_gr["Js"] = system.Js
+    param_gr["K"] = system.K
     param_gr["Ts"] = temps
+    param_gr["delta_12"] = system.delta_12
     param_gr["h_direction"] = h_direction
     param_gr["h_sweep"] = h_sweep
     param_gr["disorder_strength"] = system.disorder_strength
@@ -134,6 +136,8 @@ function write_collection_sim_anneal(path, configurations_save::Vector{Matrix{Fl
     param_gr["N"] = system.N
     param_gr["S"] = system.S
     param_gr["Js"] = system.Js
+    param_gr["K"] = system.K
+    param_gr["delta_12"] = system.delta_12
     param_gr["h_direction"] = h_direction
     param_gr["h_sweep"] = h_sweep
     param_gr["disorder_strength"] = system.disorder_strength
