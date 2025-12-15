@@ -13,12 +13,13 @@ H_bilinear = H_bilinear_all(Js, N, N_sites)
 
 cubic_sites = cubic_sites_all(N, N_sites)
 pairs_i, pairs_j, pairs_k = cubic_pairs_split_all(cubic_sites, N_sites)
-H_cubic = cubic_tensors_all(K, N, N_sites)
+unique_triplets, unique_H_cubic_vals = unique_cubic_triplets(K, N, N_sites)
+H_cubic_sparse = cubic_tensors_sparse_all(K, N, N_sites)
 
 zeeman = zeeman_field_random(h, z_local, local_interactions, delta_12, disorder_strength, N_sites, 0)
 
 if include_cubic
-    system = SpinSystem(spins, S, N, N_sites, Js, h, delta_12, disorder_strength, neighbours, H_bilinear, K, cubic_sites, H_cubic, pairs_i, pairs_j, pairs_k, zeeman)
+    system = SpinSystem(spins, S, N, N_sites, Js, h, delta_12, disorder_strength, neighbours, H_bilinear, K, cubic_sites, H_cubic_sparse, unique_triplets, unique_H_cubic_vals, pairs_i, pairs_j, pairs_k, zeeman)
 else
     system = SpinSystem(spins, S, N, N_sites, Js, h, delta_12, disorder_strength, neighbours, H_bilinear, zeeman)
 end
@@ -42,12 +43,21 @@ xticks!([N^3, 2*N^3, 3*N^3, 4*N^3])
 vline!([N^3, 2*N^3, 3*N^3, 4*N^3].+0.5, linestyle=:dash, linecolor=:red, label="")
 display(scatter!(spins[3,:], label="Sz", ms=4))
 
+println("Final energy per site: ", round(E_pyro(system)/N_sites, digits=6))
+
 S_avg = spin_expec(spins, N)
 println("Average spin per sublattice:")
 println("Sublattice 0: ", round.(S_avg[:,1], digits=4))
 println("Sublattice 1: ", round.(S_avg[:,2], digits=4))
 println("Sublattice 2: ", round.(S_avg[:,3], digits=4))
 println("Sublattice 3: ", round.(S_avg[:,4], digits=4))
+
+S_avg_global = [local_to_global(S_avg[:,i], i) for i in 1:4]
+println("Average spin in global frame per sublattice:")
+println("Sublattice 0: ", round.(S_avg_global[1], digits=4))
+println("Sublattice 1: ", round.(S_avg_global[2], digits=4))
+println("Sublattice 2: ", round.(S_avg_global[3], digits=4))
+println("Sublattice 3: ", round.(S_avg_global[4], digits=4))
 
 #save configurations to hdf5
 save_dir = "sim_anneal_collect"

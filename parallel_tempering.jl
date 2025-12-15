@@ -41,12 +41,19 @@ N_sites = 4*N^3
 
 neighbours = neighbours_all(N, N_sites)
 H_bilinear = H_bilinear_all(Js, N, N_sites)
-cubic_sites = cubic_sites_all(N, N_sites)
-H_cubic = cubic_tensors_all(K, N, N_sites)
-pairs_i, pairs_j, pairs_k = cubic_pairs_split_all(cubic_sites, N_sites)
 
-zeeman = zeeman_field_random(h, z_local, local_interactions, delta_12, disorder_strength, N_sites, seed)
-system = SpinSystem(spins_r, S, N, N_sites, Js, h, delta_12, disorder_strength, neighbours, H_bilinear, K, cubic_sites, H_cubic, pairs_i, pairs_j, pairs_k, zeeman)
+cubic_sites = cubic_sites_all(N, N_sites)
+unique_triplets, unique_H_cubic_vals = unique_cubic_triplets(K, N, N_sites)
+pairs_i, pairs_j, pairs_k = cubic_pairs_split_all(cubic_sites, N_sites)
+H_cubic_sparse = cubic_tensors_sparse_all(K, N, N_sites)
+
+zeeman = zeeman_field_random(h, z_local, local_interactions, delta_12, disorder_strength, N_sites, 0)
+
+if include_cubic
+    system = SpinSystem(spins_r, S, N, N_sites, Js, h, delta_12, disorder_strength, neighbours, H_bilinear, K, cubic_sites, H_cubic_sparse, unique_triplets, unique_H_cubic_vals, pairs_i, pairs_j, pairs_k, zeeman)
+else
+    system = SpinSystem(spins_r, S, N, N_sites, Js, h, delta_12, disorder_strength, neighbours, H_bilinear, zeeman)
+end
 
 params = MCParams(N_therm, -1, overrelax_rate, N_meas, probe_rate, replica_exchange_rate, optimize_temperature_rate)
 obs = Observables()
@@ -70,7 +77,23 @@ if r == 0
         @printf("rank %d swap rate: %.1f%% \t|\t metropolis acceptance rate: %.1f%%\n", rr, 100 * gather_accept_swap[rr]/total_swaps[rr], 100 * gather_accept_metropolis[rr]/total_metropolis)
         @printf("rank %d autocorr time: %.0f \t|\t flow: %.2f \t|\t ideal flow: %.2f\n", rr, gather_tau[rr], gather_flow[rr], 1-(rr-1)/(comm_size-1))
     end
-    
+     
+    println("\nLowest temperature rank data")
+    println("Energy per site: ", round(E_pyro(system)/N_sites, digits=6))
+    S_avg = spin_expec(spins_r, N)
+    println("Average spin per sublattice:")
+    println("Sublattice 0: ", round.(S_avg[:,1], digits=4))
+    println("Sublattice 1: ", round.(S_avg[:,2], digits=4))
+    println("Sublattice 2: ", round.(S_avg[:,3], digits=4))
+    println("Sublattice 3: ", round.(S_avg[:,4], digits=4))
+
+    S_avg_global = [local_to_global(S_avg[:,i], i) for i in 1:4]
+    println("Average spin in global frame per sublattice:")
+    println("Sublattice 0: ", round.(S_avg_global[1], digits=4))
+    println("Sublattice 1: ", round.(S_avg_global[2], digits=4))
+    println("Sublattice 2: ", round.(S_avg_global[3], digits=4))
+    println("Sublattice 3: ", round.(S_avg_global[4], digits=4))
+
     #makes save directory if it doesn't exist
     if !isdir(save_dir)
         mkdir(save_dir)
