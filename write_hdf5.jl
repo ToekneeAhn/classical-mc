@@ -74,6 +74,7 @@ function collect_hsweep(results_dir::String, file_prefix::String, save_dir::Stri
     param_gr["N"] = system.N
     param_gr["S"] = system.S
     param_gr["Js"] = system.Js
+    param_gr["K"] = system.K
     param_gr["Ts"] = temps
     param_gr["delta_12"] = system.delta_12
     param_gr["h_direction"] = h_direction
@@ -140,6 +141,7 @@ function write_collection_sim_anneal(path::String, configurations_save::Vector{M
     param_gr["N"] = system.N
     param_gr["S"] = system.S
     param_gr["Js"] = system.Js
+    param_gr["K"] = system.K
     param_gr["h_direction"] = h_direction
     param_gr["h_sweep"] = h_sweep
     param_gr["disorder_strength"] = system.disorder_strength
@@ -161,4 +163,40 @@ function read_configuration_hdf5(path::String, index::Int64)
     close(file)
 
     return spins, Ts
+end
+
+function collect_theta_sweep(results_dir::String, file_prefix::String, save_dir::String, theta_min::Float64, theta_max::Float64, N_theta::Int64)
+    raw_files = readdir(results_dir, join=false, sort=false)
+    theta_values = range(theta_min, theta_max, length=N_theta)
+    for theta in theta_values
+        fname = file_prefix*"$(theta)_hsweep.h5"
+        if fname in raw_files
+            continue
+        else
+            return println("file for theta=$(theta) not found! Aborting collection.")
+        end
+    end
+
+    file = h5open(joinpath(save_dir, file_prefix*"$(theta_min)to$(theta_max)_sweep.h5"), "w")
+
+    theta_values = range(theta_min, theta_max, length=N_theta)
+    file["theta_values"] = Vector(theta_values)
+    for theta in theta_values
+        fname = file_prefix*"$(theta)_hsweep.h5"
+        if fname in raw_files
+            fid=h5open(joinpath(results_dir,fname),"r")
+            
+            gr = create_group(file, "$(theta)")
+            # Copy each object (group or dataset) preserving structure
+            for key in keys(fid)
+                HDF5.copy_object(fid[key], gr, key)
+            end
+
+            close(fid)
+        else
+            println("file for theta=$(theta) not found!")
+        end 
+    end
+    println("Saved collected data to ", joinpath(save_dir, file_prefix*"$(theta_min)to$(theta_max)_sweep.h5"))
+    close(file)
 end

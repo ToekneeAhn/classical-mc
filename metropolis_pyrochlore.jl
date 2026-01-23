@@ -1,4 +1,5 @@
-using LinearAlgebra, StaticArrays, BinningAnalysis, Random, Interpolations, ForwardDiff, Integrals, Printf
+using LinearAlgebra, StaticArrays, BinningAnalysis, Random, MPI
+using Interpolations, ForwardDiff, Integrals, Printf 
 
 include("observables.jl")
 
@@ -18,6 +19,10 @@ local_3 = [2/sqrt(6) 1/sqrt(6) -1/sqrt(6); 0 -1/sqrt(2) -1/sqrt(2); -1/sqrt(3) 1
 local_4 = [2/sqrt(6) -1/sqrt(6) 1/sqrt(6); 0 1/sqrt(2) 1/sqrt(2); -1/sqrt(3) -1/sqrt(3) 1/sqrt(3)]'
 local_bases = [Matrix{Float64}(local_1), Matrix{Float64}(local_2), Matrix{Float64}(local_3), Matrix{Float64}(local_4)]
 
+function local_to_global(spin_local::Vector{Float64}, mu::Int64)::Vector{Float64}
+    return local_bases[mu] * spin_local
+end
+
 #sublattice-indexed pyrochlore coordinates (sipc)
 struct SIPC 
     r::Vector{Int64} #position of unit cell (i.e. sublattice 0)
@@ -35,9 +40,33 @@ mutable struct SpinSystem
     h::Vector{Float64} #external field
     delta_12::Vector{Float64} #quadratic zeeman field coupling
     disorder_strength::Float64 #Gamma parameter in Lorentzian distribution
-    H_bond::SArray{Tuple{4,4,3,3},Float64}
     neighbours::Vector{NTuple{6,Int64}}
+    H_bilinear::Vector{NTuple{6, SArray{Tuple{3,3},Float64,2,9}}}
+    K::Complex{Float64} #cubic interaction parameter
+    cubic_sites::Vector{NTuple{90,NTuple{3,Int64}}} #list of cubic interaction site tuples for each site
+    H_cubic_sparse::Vector{NTuple{90,NTuple{2,Float64}}} #cubic interaction tensors stored sparsely as (K_313, K_323)
+    #compute unique cubic triplets to avoid triple count in E_pyro
+    unique_triplets::Vector{Tuple{Int64,Int64,Int64}} #list of unique cubic triplets in the lattice
+    unique_H_cubic_vals::Vector{Tuple{Float64,Float64}} #corresponding (K_313, K_323) values for unique triplets
+    # Pre-split cubic interaction lists by the role of the central site for local_field_pyro
+    cubic_pairs_i::Vector{NTuple{30,NTuple{2,Int64}}} # for site n as first index: store (j,k)
+    cubic_pairs_j::Vector{NTuple{30,NTuple{2,Int64}}} # for site n as second index: store (i,k)
+    cubic_pairs_k::Vector{NTuple{30,NTuple{2,Int64}}} # for site n as third index: store (i,j)
     zeeman_field::Vector{NTuple{3,Float64}}
+end
+
+#constructor without cubic interactions
+function SpinSystem(spins, S, N, N_sites, Js, h, delta_12, disorder_strength, neighbours, H_bilinear, zeeman_field)
+    empty_triplets = Vector{NTuple{90,NTuple{3,Int64}}}()   
+    empty_pairs = Vector{NTuple{30,NTuple{2,Int64}}}()   
+    empty_H_cubic_sparse = Vector{NTuple{90,NTuple{2,Float64}}}()
+    empty_unique_triplets = Vector{Tuple{3,Int64}}()
+    empty_K_vals = Vector{Tuple{2,Float64}}()
+    empty_K = 0 + 0im
+    return SpinSystem(spins, S, N, N_sites, Js, h, delta_12, disorder_strength,
+                      neighbours, H_bilinear, empty_K, empty_triplets, empty_H_cubic_sparse,
+                      empty_unique_triplets, empty_K_vals,
+                      empty_pairs, empty_pairs, empty_pairs, zeeman_field)
 end
 
 #monte carlo simulation parameters
@@ -105,7 +134,152 @@ function neighbours_pyro(n::Int64, N::Int64)::NTuple{6,Int64}
     return Tuple(neighbours_flat)
 end
 
-function neighbours_all(N_sites)
+function cubic_sites_pyro(i::Int64, N::Int64)::NTuple{90,NTuple{3,Int64}}
+    neigh_i = neighbours_pyro(i, N)                # 6 neighbours of i
+    role_first  = NTuple{3,Int64}[]                # (i, j, k)
+    role_second = NTuple{3,Int64}[]                # (j, i, j2)
+    role_third  = NTuple{3,Int64}[]                # (k, j, i)
+
+    sizehint!(role_first, 30)
+    sizehint!(role_second, 30)
+    sizehint!(role_third, 30)
+
+    # Collect endpoint and middle triplets separately
+    @inbounds for j in neigh_i
+        neigh_j = neighbours_pyro(j, N)
+        # i as first and third positions (endpoint triplets)
+        @inbounds for k in neigh_j
+            if k != i
+                push!(role_first,  (i, j, k))   # i first
+                push!(role_third,  (k, j, i))   # i third
+            end
+        end
+        # i as second position (middle triplets)
+        @inbounds for j2 in neigh_i
+            if j2 != j
+                push!(role_second, (j, i, j2))  # i second
+            end
+        end
+    end
+
+    @assert length(role_first)  == 30
+    @assert length(role_second) == 30
+    @assert length(role_third)  == 30
+
+    all_triplets = vcat(role_first, role_second, role_third)
+    return Tuple(all_triplets)::NTuple{90,NTuple{3,Int64}}
+end 
+
+function cubic_sites_all(N::Int64, N_sites::Int64)
+    cubic_sites = Vector{NTuple{90,NTuple{3,Int64}}}(undef, N_sites)
+
+    for n in 1:N_sites
+        cubic_sites[n] = cubic_sites_pyro(n, N)
+    end
+
+    return cubic_sites
+end
+
+"""
+    cubic_pairs_split_all(cubic_sites, N_sites)
+
+Split each site's 90 cubic triplets into three role-specific lists of 30 pairs:
+ - cubic_pairs_i[n]: pairs (j,k) when triplet is (n,j,k)
+ - cubic_pairs_j[n]: pairs (i,k) when triplet is (i,n,k)
+ - cubic_pairs_k[n]: pairs (i,j) when triplet is (i,j,n)
+"""
+function cubic_pairs_split_all(cubic_sites::Vector{NTuple{90,NTuple{3,Int64}}}, N_sites::Int64)
+    pairs_i = Vector{NTuple{30,NTuple{2,Int64}}}(undef, N_sites)
+    pairs_j = Vector{NTuple{30,NTuple{2,Int64}}}(undef, N_sites)
+    pairs_k = Vector{NTuple{30,NTuple{2,Int64}}}(undef, N_sites)
+    
+    for n in 1:N_sites
+        cs = cubic_sites[n]
+        pairs_i[n] = Tuple([triplet[2:3] for triplet in cs[1:30]])
+        pairs_j[n] = Tuple([ (triplet[1],triplet[3]) for triplet in cs[31:60]])
+        pairs_k[n] = Tuple([triplet[1:2] for triplet in cs[61:90]])
+    end
+    
+    return pairs_i, pairs_j, pairs_k
+end
+
+function unique_cubic_triplets(K::Complex{Float64}, N::Int64, N_sites::Int64)
+    seen = Set{NTuple{3,Int64}}()
+    triplets = NTuple{3,Int64}[]
+    K_vals = NTuple{2,Float64}[]
+    for n in 1:N_sites
+        cs = cubic_sites_pyro(n, N)
+        for idx in 1:30  # only role_first to avoid duplicates
+            triplet = cs[idx]
+            if triplet ∉ seen
+                push!(seen, triplet)
+                push!(triplets, triplet)
+                i, j, k = triplet
+                sub_i = get_sublattice(i, N)
+                sub_j = get_sublattice(j, N)
+                sub_k = get_sublattice(k, N)
+                phase = gamma_ij[sub_i, sub_j] * gamma_ij[sub_j, sub_k]
+    
+                push!(K_vals, (2*real(K * phase), -2*imag(K * phase)))
+            end
+        end
+    end
+    return triplets, K_vals
+end
+
+function cubic_tensors_sparse_all(K::Complex{Float64}, N::Int64, N_sites::Int64)::Vector{NTuple{90,NTuple{2,Float64}}}
+    cubic_tensors = Vector{NTuple{90,NTuple{2,Float64}}}(undef, N_sites)
+    for n in 1:N_sites
+        cubic_sites_n = cubic_sites_pyro(n, N)
+        tensors_n = NTuple{2,Float64}[]
+        sizehint!(tensors_n, 90)
+
+        for triplet in cubic_sites_n
+            i, j, k = triplet
+            sub_i = get_sublattice(i, N)
+            sub_j = get_sublattice(j, N)
+            sub_k = get_sublattice(k, N)
+            
+            phase = gamma_ij[sub_i, sub_j] * gamma_ij[sub_j, sub_k]
+            K_313 = 2*real(K * phase)
+            K_323 = -2*imag(K * phase)
+            push!(tensors_n, (K_313, K_323))
+        end
+        cubic_tensors[n] = Tuple(tensors_n)
+    end
+    return cubic_tensors
+end
+
+function cubic_tensors_all(K::Complex{Float64}, N::Int64, N_sites::Int64)::Vector{NTuple{90,SArray{Tuple{3,3,3}, Float64, 3, 27}}}
+    cubic_tensors = Vector{NTuple{90,SArray{Tuple{3,3,3}, Float64, 3, 27}}}(undef, N_sites)
+    for n in 1:N_sites
+        cubic_sites_n = cubic_sites_pyro(n, N)
+        cubic_tensors_n = SArray{Tuple{3,3,3}, Float64, 3, 27}[]
+
+        for triplet in cubic_sites_n
+            K_cubic = zeros(3,3,3)
+            
+            i, j, k = triplet
+            sub_i = get_sublattice(i, N)
+            sub_j = get_sublattice(j, N)
+            sub_k = get_sublattice(k, N)
+
+            phase = gamma_ij[sub_i, sub_j] * gamma_ij[sub_j, sub_k] #i hope this is correct lol
+            K_cubic[3,1,3] = 2*real(K * phase)
+            K_cubic[3,2,3] = -2*imag(K * phase)
+            
+            #there should be 3 indepdendent constants (K1, K2, K3) for the three independent types of "trimers" 
+            #assume they are the same for now
+            push!(cubic_tensors_n, SArray{Tuple{3,3,3}, Float64, 3, 27}(K_cubic))
+        end
+
+        cubic_tensors[n] = Tuple(cubic_tensors_n)
+    end
+
+    return cubic_tensors
+end
+
+function neighbours_all(N::Int64, N_sites::Int64)
     coord_num = 6
     
     neighbours = NTuple{coord_num, Int64}[]
@@ -128,26 +302,37 @@ function get_spin(spins::Array{Float64,2}, site::Int64)::NTuple{3, Float64}
     @inbounds return (spins[1, site], spins[2, site], spins[3, site])
 end
 
-#4 x 4 x 3 x 3 array of interaction matrices (3x3) connecting sublattices
-function H_matrix_all(Js::Vector{Float64})::SArray{Tuple{4,4,3,3},Float64}
+#the 3x3 bilinear interaction matrices for all bonds
+function H_bilinear_all(Js::Vector{Float64}, N::Int64, N_sites::Int64)
     J_zz, J_pm, J_pmpm, J_zpm = Js
 
-    H_bond = zeros(4,4,3,3)
+    H_bilinear = Vector{NTuple{length(neighbours_pyro(1, N)), SArray{Tuple{3,3},Float64,2,9}}}() #list of tuples of interaction matrices for each site
     T = [1 im 0; 1 -im 0; 0 0 1] #rotates to (S^+, S^-, S^z) basis
     
-    for sub_i in 1:4
-        for sub_j in 1:4
-            gamma = gamma_ij[sub_i, sub_j]
-            zeta = -conj(gamma)
-            
-            if sub_i != sub_j
-                H_bond[sub_i, sub_j, :, :] .= conj(T)' * [J_pmpm*gamma -J_pm J_zpm*zeta; -J_pm J_pmpm*conj(gamma) J_zpm*conj(zeta); J_zpm*zeta J_zpm*conj(zeta) J_zz] * T
-            end
+    for n in 1:N_sites
+        neighbours_n = neighbours_pyro(n, N)
+        H_bilinear_n = []
+
+        for m in eachindex(neighbours_n)
+            push!(H_bilinear_n, 
+                begin
+                    sub_i = get_sublattice(n, N)
+                    sub_j = get_sublattice(neighbours_n[m], N)
+                    gamma = gamma_ij[sub_i, sub_j]
+                    zeta = -conj(gamma)
+                    
+                    if sub_i != sub_j
+                        SArray{Tuple{3,3},Float64,2,9}(conj(T)' * [J_pmpm*gamma -J_pm J_zpm*zeta; -J_pm J_pmpm*conj(gamma) J_zpm*conj(zeta); J_zpm*zeta J_zpm*conj(zeta) J_zz] * T)
+                    else
+                        SArray{Tuple{3,3},Float64,2,9}(zeros(3,3))
+                    end
+            end)
         end
+
+        push!(H_bilinear, Tuple(H_bilinear_n))
     end
 
-    #use static array for performance purposes because H_bond does not change
-    return SArray{Tuple{4,4,3,3},Float64}(reinterpret(Float64, real(H_bond)))
+    return H_bilinear
 end
 
 function zeeman_field_random(h, z_local, local_interactions, delta_12, G, N_sites, seed=123, breaking_field=[zeros(3), zeros(3), zeros(3), zeros(3)])::Vector{NTuple{3,Float64}}
@@ -173,54 +358,105 @@ function zeeman_field_random(h, z_local, local_interactions, delta_12, G, N_site
     return zeeman_eff
 end
 
-#h_loc at site i is dH/dS_i
-function local_field_pyro(spins::Array{Float64,2}, H_bond::SArray{Tuple{4,4,3,3}, Float64}, neighbours_n::NTuple{6,Int64}, zeeman::Vector{NTuple{3,Float64}}, n::Int64, N::Int64)::NTuple{3,Float64}
-    sublattice = get_sublattice(n, N)
-    
-    #avoid matrix multiplication for performance purposes
-    Hx=0.0
-    Hy=0.0
-    Hz=0.0
-    
-    for m in neighbours_n
-        sx, sy, sz = get_spin(spins, m)
-        H_ij = Matrix{Float64}
-        @inbounds H_ij = H_bond[sublattice, get_sublattice(m, N), :, :]
-        @inbounds Hx += H_ij[1,1] * sx + H_ij[1,2] * sy + H_ij[1,3] * sz
-        @inbounds Hy += H_ij[2,1] * sx + H_ij[2,2] * sy + H_ij[2,3] * sz
-        @inbounds Hz += H_ij[3,1] * sx + H_ij[3,2] * sy + H_ij[3,3] * sz
-    end
+@inline function local_field_pyro(sys::SpinSystem, n::Int64)::NTuple{3,Float64}
+    @inbounds begin
+        neighs = sys.neighbours[n]          # NTuple{6,Int}
+        Hs     = sys.H_bilinear[n]          # NTuple{6, SMatrix{3,3}}
+        S      = sys.spins                  # 3×N_sites matrix
 
-    h_z = zeeman[n]
-    return (Hx-h_z[1], Hy-h_z[2], Hz-h_z[3])
+        Hx = 0.0; Hy = 0.0; Hz = 0.0
+
+        # Fixed degree: 6 neighbours. Use literal indices for SMatrix getindex.
+        for k in eachindex(neighs)
+            m  = neighs[k]
+            sx = S[1, m]; sy = S[2, m]; sz = S[3, m]
+            H  = Hs[k]
+
+            h11 = H[1,1]; h12 = H[1,2]; h13 = H[1,3]
+            h21 = H[2,1]; h22 = H[2,2]; h23 = H[2,3]
+            h31 = H[3,1]; h32 = H[3,2]; h33 = H[3,3]
+
+            Hx += h11*sx + h12*sy + h13*sz
+            Hy += h21*sx + h22*sy + h23*sz
+            Hz += h31*sx + h32*sy + h33*sz
+        end
+
+        #cubic part
+        if !isempty(sys.H_cubic_sparse)
+            Hc = sys.H_cubic_sparse[n]
+            pairs_i = sys.cubic_pairs_i[n]
+            pairs_j = sys.cubic_pairs_j[n]
+            pairs_k = sys.cubic_pairs_k[n]
+
+            # n is first index (i): dE/dSi = K[a,b,c]*Sj[b]*Sk[c] → only a=3,b∈{1,2},c=3 nonzero
+            @inbounds for p in 1:30
+                K313, K323 = Hc[p]
+                j, k = pairs_i[p]
+                Sj1 = S[1, j]; Sj2 = S[2, j]
+                Sk3 = S[3, k]
+                Hz += (K313*Sj1 + K323*Sj2) * Sk3
+            end
+
+            # n is second index (j): dE/dSj = K[a,b,c]*Si[a]*Sk[c] → only a=3,b∈{1,2},c=3 nonzero
+            @inbounds for p in 1:30
+                K313, K323 = Hc[p+30]
+                i, k = pairs_j[p]
+                prod = S[3, i] * S[3, k]
+                Hx += K313 * prod
+                Hy += K323 * prod
+            end
+
+            # n is third index (k): dE/dSk = K[a,b,c]*Si[a]*Sj[b] → only a=3,b∈{1,2},c=3 nonzero
+            @inbounds for p in 1:30
+                K313, K323 = Hc[p+60]
+                i, j = pairs_k[p]
+                Sj1 = S[1, j]; Sj2 = S[2, j]
+                Si3 = S[3, i]
+                Hz += Si3 * (K313*Sj1 + K323*Sj2)
+            end
+        end
+
+        h = sys.zeeman_field[n]
+        return (Hx - h[1], Hy - h[2], Hz - h[3])
+    end
 end
 
-#energy of spin configuration with periodic boundary conditions
-function E_pyro(spins::Array{Float64,2}, H_bond::SArray{Tuple{4,4,3,3}, Float64}, neighbours::Vector{NTuple{6,Int64}}, zeeman::Vector{NTuple{3,Float64}}, N::Int64)::Float64
-    N_sites = 4*N^3
-    E = 0.0
+function E_pyro(sys::SpinSystem)::Float64
+    E_bilinear = 0.0
+    E_cubic = 0.0
+    E_zeeman = 0.0
     
-    for n in 1:N_sites
+    for n in 1:sys.N_sites
         #quadratic interaction, divide by 2 because each bond counted twice
-        sublattice = get_sublattice(n, N)
-        S_n = get_spin(spins, n)
+        S_n = get_spin(sys.spins, n)
 
-        for m in neighbours[n]
-            #use a view to avoid allocating an array
-            @inbounds E += 0.5 * dot(S_n, H_bond[sublattice, get_sublattice(m, N),:,:] * view(spins, :, m))
+        for m in eachindex(sys.neighbours[n])
+            S_m = get_spin(sys.spins, sys.neighbours[n][m])
+
+            E_bilinear += S_n[1] * sys.H_bilinear[n][m][1,1] * S_m[1] + S_n[1] * sys.H_bilinear[n][m][1,2] * S_m[2] + S_n[1] * sys.H_bilinear[n][m][1,3] * S_m[3]
+            E_bilinear += S_n[2] * sys.H_bilinear[n][m][2,1] * S_m[1] + S_n[2] * sys.H_bilinear[n][m][2,2] * S_m[2] + S_n[2] * sys.H_bilinear[n][m][2,3] * S_m[3]
+            E_bilinear += S_n[3] * sys.H_bilinear[n][m][3,1] * S_m[1] + S_n[3] * sys.H_bilinear[n][m][3,2] * S_m[2] + S_n[3] * sys.H_bilinear[n][m][3,3] * S_m[3] 
         end
 
         #zeeman contribution
-        @inbounds E += - dot(zeeman[n], S_n)
+        E_zeeman += - dot(sys.zeeman_field[n], S_n)
+    end
+    if length(sys.cubic_sites) > 0
+        @inbounds for t in eachindex(sys.unique_triplets)
+            i, j, k = sys.unique_triplets[t]
+            K313, K323 = sys.unique_H_cubic_vals[t]
+            Si3 = sys.spins[3, i]; Sj1 = sys.spins[1, j]; Sj2 = sys.spins[2, j]; Sk3 = sys.spins[3, k]
+            E_cubic += (K313*Sj1 + K323*Sj2) * Si3 * Sk3
+        end        
     end
     
     #total energy, not energy per site
-    return E
+    return E_bilinear/2.0 + E_cubic + E_zeeman
 end
 
-function energy_difference_pyro(spins::Array{Float64,2}, old_spin::NTuple{3,Float64}, H_bond::SArray{Tuple{4,4,3,3}, Float64}, neighbours_n::NTuple{6,Int64}, zeeman::Vector{NTuple{3,Float64}}, n::Int64, N::Int64)::Float64
-    h_loc = local_field_pyro(spins, H_bond, neighbours_n, zeeman, n, N)
-    E_new = dot(get_spin(spins, n), h_loc)
+function energy_difference_pyro(sys::SpinSystem, old_spin::NTuple{3,Float64}, n::Int64)::Float64
+    h_loc = local_field_pyro(sys, n)
+    E_new = dot(get_spin(sys.spins, n), h_loc)
     E_old = dot(old_spin, h_loc)
 
     return E_new - E_old 
@@ -232,7 +468,6 @@ function spins_initial_pyro(N::Int64, S::Float64)::Array{Float64,2}
     spins = rand(3, N_sites)
     for j=1:N_sites
         spins[:,j] .*= S/norm(spins[:,j]) #normalizes each spin to length S
-        #spins[j,:] = [0,0,1]
     end
     return spins
 end
@@ -248,45 +483,41 @@ function sphere_pick(S::Float64)::NTuple{3,Float64}
 end
 
 #metropolis algorithm with deterministic updates (aligning spins to their local field)
-function metropolis!(spins::Array{Float64,2}, accept_count::Array{Int64,1}, S::Float64, H_bond::SArray{Tuple{4,4,3,3}, Float64}, neighbours::Vector{NTuple{6,Int64}}, zeeman::Vector{NTuple{3,Float64}}, N::Int64, T::Float64)
-    N_sites = 4*N^3
+function metropolis!(sys::SpinSystem, accept_count::Array{Int64,1},T::Float64)
+    N_sites = sys.N_sites
     
     for site in 1:N_sites #1 sweep has N_sites steps
         i = rand(1:N_sites)        
-        old_spin = get_spin(spins, i) #copy previous configuration 
-        set_spin!(spins, sphere_pick(S), i)
+        old_spin = get_spin(sys.spins, i) #copy previous configuration 
+        set_spin!(sys.spins, sphere_pick(sys.S), i)
         
-        delta_E = energy_difference_pyro(spins, old_spin, H_bond, neighbours[i], zeeman, i, N) 
+        delta_E = energy_difference_pyro(sys, old_spin, i) 
         
         #accept if energy is lower (delta E < 0) or with probability given by Boltzmann weight
         no_accept = delta_E > 0 && (rand() > exp(-delta_E/T))
-        accept_count .+= 1-no_accept
+        accept_count[1] += 1 - no_accept
         
         #otherwise revert to previous configuration
         if no_accept 
-            set_spin!(spins, old_spin, i)
+            set_spin!(sys.spins, old_spin, i)
         end
     end 
 end
 
-function det_update!(spins::Array{Float64,2}, S::Float64, H_bond::SArray{Tuple{4,4,3,3}, Float64}, neighbours::Vector{NTuple{6,Int64}}, zeeman::Vector{NTuple{3,Float64}}, N::Int64)
-    N_sites = 4*N^3
-    
-    for n in 1:N_sites
-        h_loc = local_field_pyro(spins, H_bond, neighbours[n], zeeman, n, N)
-        set_spin!(spins, -S .* h_loc ./ sqrt(h_loc[1]^2+h_loc[2]^2+h_loc[3]^2), n)
+function det_update!(sys::SpinSystem)
+    for n in 1:sys.N_sites
+        h_loc = local_field_pyro(sys, n)
+        set_spin!(sys.spins, -sys.S .* h_loc ./ sqrt(h_loc[1]^2+h_loc[2]^2+h_loc[3]^2), n)
     end
 end
 
 #overrelaxation (microcanonical sweep) which reflects each spin about the local field
-function overrelax_pyro!(spins::Array{Float64,2}, H_bond::SArray{Tuple{4,4,3,3}, Float64}, neighbours::Vector{NTuple{6,Int64}}, zeeman::Vector{NTuple{3,Float64}}, N::Int64)
-    N_sites = 4*N^3
-    
-    for n in 1:N_sites
-        h_loc = local_field_pyro(spins, H_bond, neighbours[n], zeeman, n, N)
-        S_n = get_spin(spins, n)
+function overrelax_pyro!(sys::SpinSystem)
+    for n in 1:sys.N_sites
+        h_loc = local_field_pyro(sys, n)
+        S_n = get_spin(sys.spins, n)
         S_new = 2.0 * dot(S_n, h_loc)/(h_loc[1]^2+h_loc[2]^2+h_loc[3]^2) .* h_loc .- S_n
-        set_spin!(spins, S_new, n)
+        set_spin!(sys.spins, S_new, n)
     end
 end
 
@@ -297,25 +528,20 @@ function sim_anneal!(mc::Simulation, schedule::Function, output_temp::Vector{Flo
     overrelax_rate = mc.parameters.overrelax_rate
 
     N = mc.spin_system.N
-    S = mc.spin_system.S
     N_sites = mc.spin_system.N_sites
     
-    H_bond = mc.spin_system.H_bond
-    neighbours = mc.spin_system.neighbours
-    zeeman = mc.spin_system.zeeman_field
-
     accept_count = [0]
     N_output_temp = length(output_temp)
     output_configurations = Array{Matrix{Float64}}(undef, N_output_temp)
     
     #metropolis + overrelaxation
-    T = schedule(0) 
+    T = schedule(0)::Float64
     T_f = mc.T #set the T parameter to the target temp
     
     t0 = 0
     T_schedule = Float64[]
     while T > T_f
-        T = schedule(t0)
+        T = schedule(t0)::Float64
         push!(T_schedule, T)
         t0 += 1
     end
@@ -335,18 +561,18 @@ function sim_anneal!(mc::Simulation, schedule::Function, output_temp::Vector{Flo
         T = T_schedule[t]
         for sweep in 1:N_therm
             if sweep % overrelax_rate == 0
-                metropolis!(mc.spin_system.spins, accept_count, S, H_bond, neighbours, zeeman, N, T)
+                metropolis!(mc.spin_system, accept_count, T)
             else
-                overrelax_pyro!(mc.spin_system.spins, H_bond, neighbours, zeeman, N)
+                overrelax_pyro!(mc.spin_system)
             end
         end
 
         if print_progress
-            @printf("T=%.6f: %.3f%%\n", T, accept_count[1]/(N_sites*N_therm/overrelax_rate)*100)
+            @printf("T=%.6f: %.3f%%\n", T, Float64(accept_count[1]/(N_sites*N_therm/overrelax_rate)*100))
         end
         accept_count = [0] 
 
-        energies_therm[t] = E_pyro(mc.spin_system.spins, H_bond, neighbours, zeeman, N)
+        energies_therm[t] = E_pyro(mc.spin_system)
 
         #save spin configuration
         if t in save_ind           
@@ -356,11 +582,11 @@ function sim_anneal!(mc::Simulation, schedule::Function, output_temp::Vector{Flo
     end
     
     for _ in 1:N_det        
-        det_update!(mc.spin_system.spins, S, H_bond, neighbours, zeeman, N)    
+        det_update!(mc.spin_system)
     end        
     
     #each simulated annealing run constitutes one measurement (at the end)
-    E = E_pyro(mc.spin_system.spins, H_bond, neighbours, zeeman, N)
+    E = E_pyro(mc.spin_system)
     avg_spin = spin_expec(mc.spin_system.spins, N)
     m = norm(magnetization_global(avg_spin, local_bases, mc.spin_system.h))
 
@@ -381,11 +607,6 @@ function parallel_temper!(mc::Simulation, rank::Int64, temp::Vector{Float64}, co
     optimize_temperature_rate = mc.parameters.optimize_temperature_rate
 
     N = mc.spin_system.N
-    S = mc.spin_system.S
-    
-    H_bond = mc.spin_system.H_bond
-    neighbours = mc.spin_system.neighbours
-    zeeman = mc.spin_system.zeeman_field
 
     N_ranks = length(temp)
     T = mc.T
@@ -412,12 +633,12 @@ function parallel_temper!(mc::Simulation, rank::Int64, temp::Vector{Float64}, co
         
         #do overrelaxation and metropolis with relative frequency overrelax_rate
         if sweep % overrelax_rate == 0
-            metropolis!(mc.spin_system.spins, accept_count_metropolis, S, H_bond, neighbours, zeeman, N, T)
+            metropolis!(mc.spin_system, accept_count_metropolis, T)
         else
-            overrelax_pyro!(mc.spin_system.spins, H_bond, neighbours, zeeman, N)
+            overrelax_pyro!(mc.spin_system)
         end
         
-        E = E_pyro(mc.spin_system.spins, H_bond, neighbours, zeeman, N)
+        E = E_pyro(mc.spin_system)
         energies[sweep] = E
 
         if sweep > N_therm && sweep % probe_rate == 0
@@ -478,10 +699,7 @@ function parallel_temper!(mc::Simulation, rank::Int64, temp::Vector{Float64}, co
 
     denom = n_up + n_down
     flow = denom == 0 ? 0.0 : n_up / denom
-    fname = replace(pwd(), "\\" => "/") * "/pt_out/E_final_" * string(rank) * ".txt"
-    output_data = "rank $(rank) at T=$(T)\nE=" * string(energies[end]) * "\n" * mc.replica_label
-    write(fname, output_data)
-
+    
     return energies, accept_count_metropolis, accept_count_swap, flow
 end
 

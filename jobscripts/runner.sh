@@ -21,7 +21,7 @@ then
   #submit=$(sbatch --ntasks=$ntasks --time=$runtime --mem-per-cpu=$mem --job-name=$name mpi_jobscript.sh $params_file)
 
   job_params=( $(yq '.parallel_temper.job[]' $params_file) )
-  submit=$(sbatch --ntasks=$ntasks --time=${job_params[0]} --mem-per-cpu=${job_params[1]} --job-name=${job_params[2]} sim_anneal_jobscript.sh $params_file | awk '{print $NF}')
+  submit=$(sbatch --ntasks=$ntasks --time=${job_params[0]} --mem-per-cpu=${job_params[1]} --job-name=${job_params[2]} mpi_jobscript.sh $params_file | awk '{print $NF}')
   submit=( $submit )
   job_id=${submit[-1]}
 

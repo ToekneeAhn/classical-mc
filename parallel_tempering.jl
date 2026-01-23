@@ -8,6 +8,8 @@ params = YAML.load_file(ARGS[1])
 N = params["N_uc"]
 S = params["S"]
 Js = params["Js"]
+include_cubic = params["include_cubic"]
+K = params["K"][1] + im * params["K"][2] 
 h_theta = params["h_theta"]
 h_sweep_args = params["h_sweep_args"]
 N_h = params["N_h"]
@@ -38,44 +40,6 @@ h = h_sweep[h_index]*h_direction
 
 T_min, T_max = T_args
 
-#=
-mc_params = ARGS[1]
-N_therm, overrelax_rate, N_meas, probe_rate, replica_exchange_rate, optimize_temperature_rate = [parse(Int64, num) for num in split(mc_params,",")]
-N = parse(Int64, ARGS[2])
-S = parse(Float64, ARGS[3])
-Js = ARGS[4]
-Js = [parse(Float64, num) for num in split(Js,",")]
-delta_12 = Js[5:6]
-#=
-h_direction = ARGS[5] #comma-separated e.g. "1,1,1" or "1,1,0"
-h_direction = [parse(Int64, hh) for hh in split(h_direction,",")]
-h_direction /= norm(h_direction)
-=#
-h_theta = parse(Float64, ARGS[5]) #angle from [111] direction towards [1-10] in degrees
-h_direction = [1.0,1.0,1.0]/sqrt(3) .* cos(h_theta * pi/180) .+ [1.0,-1.0,0.0]/sqrt(2) .* sin(h_theta * pi/180)
-h_sweep_args = ARGS[6]
-h_min, h_max = [parse(Float64, num) for num in split(h_sweep_args,",")]
-N_h = parse(Int64, ARGS[7])
-Ts = ARGS[8]
-T_min, T_max = [parse(Float64, num) for num in split(Ts,",")]
-results_dir = replace(pwd(),"\\"=>"/")*"/"*ARGS[9]
-file_prefix = ARGS[10]
-save_dir = ARGS[11]
-disorder_strength = parse(Float64, ARGS[12])
-disorder_seed = [parse(Int64, ARGS[13])]
-h_index = parse(Int64, ARGS[14])
-
-h_sweep = range(h_min, h_max, N_h)
-h = h_sweep[h_index]*h_direction
-
-if length(ARGS) >= 15
-    load_configs_path = ARGS[15]*"$(h_index).h5"
-else
-    load_configs_path = "none"
-end
-=#
-
-
 MPI.Init()
 comm = MPI.COMM_WORLD
 comm_size = MPI.Comm_size(comm)
@@ -102,10 +66,28 @@ N_sites = 4*N^3
 @assert size(spins_r, 2) == N_sites "Loaded spin configuration has incorrect number of sites"
 @assert length(Ts) == comm_size "Loaded temperature array has incorrect length"
 
-H_ij = H_matrix_all(Js)
-neighbours = neighbours_all(N_sites)
+neighbours = neighbours_all(N, N_sites)
+H_bilinear = H_bilinear_all(Js, N, N_sites)
+
+cubic_sites = cubic_sites_all(N, N_sites)
+unique_triplets, unique_H_cubic_vals = unique_cubic_triplets(K, N, N_sites)
+pairs_i, pairs_j, pairs_k = cubic_pairs_split_all(cubic_sites, N_sites)
+H_cubic_sparse = cubic_tensors_sparse_all(K, N, N_sites)
+
 zeeman = zeeman_field_random(h, z_local, local_interactions, delta_12, disorder_strength, N_sites, disorder_seed, breaking_field)
-system = SpinSystem(spins_r, S, N, N_sites, Js, h, delta_12, disorder_strength, H_ij, neighbours, zeeman)
+
+if include_cubic
+    system = SpinSystem(spins_r, S, N, N_sites, Js, h, delta_12, disorder_strength, neighbours, H_bilinear, K, cubic_sites, H_cubic_sparse, unique_triplets, unique_H_cubic_vals, pairs_i, pairs_j, pairs_k, zeeman)
+    if r == 0
+        println("Including cubic interactions with K = $(K)")
+    end
+else
+    system = SpinSystem(spins_r, S, N, N_sites, Js, h, delta_12, disorder_strength, neighbours, H_bilinear, zeeman)
+    if r == 0
+        println("Not including cubic interactions.")
+    end
+end
+
 params = MCParams(N_therm, -1, overrelax_rate, N_meas, probe_rate, replica_exchange_rate, optimize_temperature_rate)
 obs = Observables()
 simulation = Simulation(system, Ts[r+1], params, obs, r, "none") 
@@ -117,6 +99,7 @@ gather_tau = MPI.Gather(unbinned_tau(energies_r[N_therm:end]), comm, root=0)
 gather_flow = MPI.Gather(flow_r, comm, root=0)
 
 if r == 0
+    println("h point $(h_index)/$(N_h) completed.")
     total_swaps = (N_therm + N_meas)/replica_exchange_rate * ones(comm_size)
     #edge temperature ranks only swap when swap_type=0, i.e. half the time
     total_swaps[1] /= 2

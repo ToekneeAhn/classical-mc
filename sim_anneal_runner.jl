@@ -7,6 +7,8 @@ params = YAML.load_file(ARGS[1])
 N = params["N_uc"]
 S = params["S"]
 Js = params["Js"]
+include_cubic = params["include_cubic"]
+K = params["K"][1] + im * params["K"][2] 
 h_theta = params["h_theta"]
 h_sweep_args = params["h_sweep_args"]
 N_h = params["N_h"]
@@ -25,7 +27,7 @@ results_dir = params_sa["results_dir"]
 save_dir = params_sa["save_dir"]
 file_prefix = params_sa["file_prefix"]
 
-h_direction = [1.0,1.0,1.0]/sqrt(3) .* cos(h_theta * pi/180) .+ [-1.0,-1.0,2.0]/sqrt(6) .* sin(h_theta * pi/180)
+h_direction = [1.0,1.0,1.0]/sqrt(3) .* cos(h_theta * pi/180) .+ [1.0,1.0,-2.0]/sqrt(6) .* sin(h_theta * pi/180)
 h_min, h_max = h_sweep_args
 h_sweep = range(h_min, h_max, N_h)
 #h_index defined below by MPI rank
@@ -41,43 +43,6 @@ if save_configs
 else
     temp_save = []
 end
-#=
-mc_params = ARGS[1]
-N_therm, overrelax_rate, N_det = [parse(Int64, num) for num in split(mc_params,",")]
-N = parse(Int64, ARGS[2])
-S = parse(Float64, ARGS[3])
-Js = ARGS[4]
-Js = [parse(Float64, num) for num in split(Js,",")]
-delta_12 = Js[5:6]
-h_theta = parse(Float64, ARGS[5]) #angle from [111] direction towards [1-10] in degrees
-h_direction = [1.0,1.0,1.0]/sqrt(3) .* cos(h_theta * pi/180) .+ [1.0,-1.0,0.0]/sqrt(2) .* sin(h_theta * pi/180)
-#=
-h_direction = ARGS[5] #comma-separated e.g. "1,1,1" or "1,1,0"
-h_direction = [parse(Int64, hh) for hh in split(h_direction,",")]
-h_direction /= norm(h_direction)
-=#
-h_sweep_args = ARGS[6]
-h_min, h_max = [parse(Float64, num) for num in split(h_sweep_args,",")]
-N_h = parse(Int64, ARGS[7])
-Ts = ARGS[8]
-T_f, T_i = [parse(Float64, num) for num in split(Ts,",")]
-results_dir = replace(pwd(),"\\"=>"/")*"/"*ARGS[9]
-file_prefix = ARGS[10]
-save_dir = ARGS[11]
-disorder_strength = parse(Float64, ARGS[12])
-disorder_seed = [parse(Int64, ARGS[13])]
-
-if length(ARGS) >= 14
-    temp_save_args = ARGS[14]
-    temp_save_min, temp_save_max = [parse(Float64, num) for num in split(temp_save_args,",")]
-    N_temp_save = parse(Int64, ARGS[15])
-    #temp_save = Vector(range(temp_save_min, temp_save_max, N_temp_save))
-    temp_save = exp10.(range(log10(temp_save_min), stop=log10(temp_save_max), length=N_temp_save)) 
-    config_save_prefix = ARGS[16]
-else
-    temp_save = []
-end
-=#
 
 MPI.Init()
 comm = MPI.COMM_WORLD
@@ -100,11 +65,28 @@ N_sites = 4*N^3
 #random initial configuration
 spins = spins_initial_pyro(N, S)
 
-H_ij = H_matrix_all(Js)
-neighbours = neighbours_all(N_sites)
+neighbours = neighbours_all(N, N_sites)
+H_bilinear = H_bilinear_all(Js, N, N_sites)
+
+cubic_sites = cubic_sites_all(N, N_sites)
+unique_triplets, unique_H_cubic_vals = unique_cubic_triplets(K, N, N_sites)
+pairs_i, pairs_j, pairs_k = cubic_pairs_split_all(cubic_sites, N_sites)
+H_cubic_sparse = cubic_tensors_sparse_all(K, N, N_sites)
+
 zeeman = zeeman_field_random(h, z_local, local_interactions, delta_12, disorder_strength, N_sites, disorder_seed, breaking_field)
 
-system = SpinSystem(spins, S, N, N_sites, Js, h, delta_12, disorder_strength, H_ij, neighbours, zeeman)
+if include_cubic
+    system = SpinSystem(spins, S, N, N_sites, Js, h, delta_12, disorder_strength, neighbours, H_bilinear, K, cubic_sites, H_cubic_sparse, unique_triplets, unique_H_cubic_vals, pairs_i, pairs_j, pairs_k, zeeman)
+    if r == 0
+        println("Including cubic interactions with K = $(K)")
+    end
+else
+    system = SpinSystem(spins, S, N, N_sites, Js, h, delta_12, disorder_strength, neighbours, H_bilinear, zeeman)
+    if r == 0
+        println("Not including cubic interactions.")
+    end
+end
+
 params = MCParams(N_therm, N_det, overrelax_rate, -1, -1, -1, -1)
 simulation = Simulation(system, T_f, params, Observables(), 0, "none")
 
@@ -125,7 +107,7 @@ if save_configs
     #how should we do this...
     write_collection_sim_anneal(joinpath(save_dir, save_configs_prefix)*"$(h_index).h5", configurations_save, params, system, temp_save, h_direction, [norm(h)], disorder_seed)
 else
-    sim_anneal!(simulation, t-> T_i * 0.9^t, Float64[], false)
+    sim_anneal!(simulation, t-> T_i * 0.9^t, Float64[], r == 0 ? true : false)
 end
 
 #writes measurements to a file
@@ -136,5 +118,7 @@ MPI.Barrier(comm) #barrier in case
 #collect results about T_f when sweep finished
 if r == 0
     collect_hsweep(results_dir, file_prefix, save_dir, system, params, [T_f], h_direction, Vector(h_sweep), disorder_seed)
+    #make better
+    #collect_theta_sweep("/scratch/antony/theta_sweep", "Jzz=1.0_topright_hhltheta=", "/scratch/antony/theta_sweep", -90.0, 90.0, 181)
 end
 
