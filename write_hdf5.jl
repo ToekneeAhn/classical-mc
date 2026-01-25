@@ -30,7 +30,7 @@ function write_all(path, mc::Simulation)
 end
 
 #writes measurements to a file
-function write_observables(path, mc::Simulation)
+function write_observables(path, mc::Simulation, spin_config::Matrix{Float64}=nothing)
     obs = mc.observables
     file = h5open(path, "w")
     
@@ -51,6 +51,10 @@ function write_observables(path, mc::Simulation)
     file["susceptibility_err"] = dsusc
     file["dSdT"] = spinderiv
     file["dSdT_err"] = dspinderiv
+
+    if spin_config !== nothing
+        file["spins"] = spin_config
+    end
 
     close(file)
 end
@@ -109,8 +113,9 @@ function collect_hsweep(results_dir::String, file_prefix::String, save_dir::Stri
 
     obs_dict = Dict("magnetization"=>N_h, "magnetization_err"=>N_h, "energy"=>N_h, "energy_err"=>N_h, 
                     "specific_heat"=>N_h, "specific_heat_err"=>N_h,
-                    "susceptibility"=>N_h, "susceptibility_err"=>N_h, "binder"=>N_h, "binder_err"=>N_h,  
-                    "avg_spin"=>(N_h,3,4), "avg_spin_err"=>(N_h,3,4), "dSdT"=>(N_h,3,4), "dSdT_err"=>(N_h,3,4))
+                    "susceptibility"=>N_h, "susceptibility_err"=>N_h, #"binder"=>N_h, "binder_err"=>N_h,  
+                    "avg_spin"=>(N_h,3,4), "avg_spin_err"=>(N_h,3,4), "dSdT"=>(N_h,3,4), "dSdT_err"=>(N_h,3,4),
+                    "spins"=>(N_h, size(system.spins,1), size(system.spins,2)))
     
     for rank in 0:(N_ranks-1)
         #all as a function of magnetic field h

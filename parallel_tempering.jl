@@ -8,9 +8,10 @@ include("input_file.jl")
 save_dir = replace(pwd(),"\\"=>"/")*"/"*ARGS[1]*"/"
 h_direction = ARGS[2] #comma-separated e.g. "1,1,1" or "1,1,0"
 h_direction = [parse(Int64, hh) for hh in split(h_direction,",")]
-h_index = 0
+h_index = 1
+N_h = 1
 #h_dir as a string with no spaces
-save_prefix = string(h_direction...) 
+file_prefix = string(h_direction...)*"_h" 
 h_direction /= norm(h_direction)
 seed=123
 
@@ -98,14 +99,17 @@ if r == 0
     if !isdir(save_dir)
         mkdir(save_dir)
     end
-
-    #writes everything except measurements to a file
-    fname_params = save_prefix*"_simulation_params_h$(h_index).h5"
-    write_all(save_dir*fname_params, simulation)
 end
 
 
 MPI.Barrier(comm) #barrier in case 
 #writes measurements to a file
-fname=save_prefix*"_obs_h$(h_index)_$(r).h5"
-write_observables(save_dir*fname, simulation)
+fname=file_prefix*"$(h_index)_$(r).h5"
+write_observables(save_dir*fname, simulation, spins_r)
+
+#collect results when sweep finished
+if h_index == N_h
+    if r == 0
+        collect_hsweep(save_dir, file_prefix, save_dir, system, params, Ts, h_direction, [norm(h)], seed)
+    end
+end
