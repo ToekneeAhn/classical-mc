@@ -1,15 +1,37 @@
-using MPI, LinearAlgebra, YAML
+using MPI, LinearAlgebra, YAML, ArgParse
 
 include("metropolis_pyrochlore.jl")
 include("write_hdf5.jl")
 
-params = YAML.load_file(ARGS[1]) 
+s = ArgParseSettings()
+@add_arg_table s begin
+    "--params_file"
+        help = "Path to the YAML parameter file"
+        arg_type = String
+        required = true
+    "--theta_index"
+        help = "Index of the theta value to use"
+        arg_type = Int
+        required = false
+end
+
+parsed_args = parse_args(s)
+params = YAML.load_file(parsed_args["params_file"]) 
+if parsed_args["theta_index"] !== nothing #theta sweep job
+    theta_index = parsed_args["theta_index"] + 1
+    theta_sweep = range(params["theta_min"], params["theta_max"], params["N_theta"])
+    h_theta = theta_sweep[theta_index]
+    file_prefix = params["sim_anneal"]["file_prefix"] * "_theta=$(h_theta)_h"
+else #normal simulated annealing job
+    h_theta = params["h_theta"]
+    file_prefix = params["sim_anneal"]["file_prefix"]
+end
+
 N = params["N_uc"]
 S = params["S"]
 Js = params["Js"]
 include_cubic = params["include_cubic"]
 K = params["K"][1] + im * params["K"][2] 
-h_theta = params["h_theta"]
 h_sweep_args = params["h_sweep_args"]
 N_h = params["N_h"]
 delta_12 = params["delta_12"]
@@ -25,7 +47,6 @@ T_args = params_sa["T_args"]
 save_configs = params_sa["save_configs"]
 results_dir = params_sa["results_dir"]
 save_dir = params_sa["save_dir"]
-file_prefix = params_sa["file_prefix"]
 
 h_direction = [1.0,1.0,1.0]/sqrt(3) .* cos(h_theta * pi/180) .+ [1.0,1.0,-2.0]/sqrt(6) .* sin(h_theta * pi/180)
 h_min, h_max = h_sweep_args

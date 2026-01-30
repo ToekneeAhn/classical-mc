@@ -1,0 +1,49 @@
+#system parameters
+N_uc: 6 #number of unit cells
+S: 0.5 #spin length
+Js: #exchange coupling constants
+  - 2.0
+  - -0.5
+  - 0.02
+  - 0.0
+include_cubic: true #whether to include cubic spin interaction S^z S^+ S^z
+K: #cubic interaction strength (real and imaginary parts)
+  - 0.05
+  - 0.00
+#external magnetic field parameters
+theta_min: -0.0
+theta_max: 2.0
+N_theta: 3
+h_sweep_args:
+  - 0.1
+  - 16.75
+N_h: 64
+delta_12: #quadratic zeeman coupling constants
+  - 0.0
+  - 0.0
+#disorder (random transverse field) parameters
+disorder_strength: 0.0
+disorder_seed: 123456
+#monte carlo simulation parameters
+sim_anneal:
+  job:
+    time: "2:00:00"
+    mem_per_cpu: "1000M"
+    job_name: "theta"
+  file_prefix: "test_Jzz=2.0_piflux_K=0.05"
+  results_dir: "../sim_anneal_out" #temporary storage
+  save_dir: "../theta_sweep" #final storage
+  mc_params:
+    N_therm: 500000
+    overrelax_rate: 10
+    N_det: 0
+  T_args: #temperature schedule
+    - 0.02
+    - 2.0
+  #save configurations at low T for use as initial conditions
+  save_configs: false
+  T_save_args:
+    - 0.001
+    - 0.25
+  N_save: 48
+  save_configs_prefix: "../pt_collect/save_config/Jpm=0_Jpmpm+_h"

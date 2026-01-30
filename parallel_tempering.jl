@@ -1,10 +1,25 @@
-using MPI, LinearAlgebra, Printf, YAML
+using MPI, LinearAlgebra, Printf, YAML, ArgParse
 using BinningAnalysis: unbinned_tau
 
 include("metropolis_pyrochlore.jl")
 include("write_hdf5.jl")
 
-params = YAML.load_file(ARGS[1]) 
+s = ArgParseSettings()
+@add_arg_table s begin
+    "--params_file"
+        help = "Path to the YAML parameter file"
+        arg_type = String
+        required = true
+    "--h_index"
+        help = "Index of the h value to use"
+        arg_type = Int
+        required = true
+end
+
+parsed_args = parse_args(s)
+params = YAML.load_file(parsed_args["params_file"])
+h_index = parsed_args["h_index"]
+
 N = params["N_uc"]
 S = params["S"]
 Js = params["Js"]
@@ -35,7 +50,7 @@ file_prefix = params_pt["file_prefix"]
 h_direction = [1.0,1.0,1.0]/sqrt(3) .* cos(h_theta * pi/180) .+ [1.0,-1.0,0.0]/sqrt(2) .* sin(h_theta * pi/180)
 h_min, h_max = h_sweep_args
 h_sweep = range(h_min, h_max, N_h)
-h_index = parse(Int64, ARGS[2])
+
 h = h_sweep[h_index]*h_direction
 
 T_min, T_max = T_args
