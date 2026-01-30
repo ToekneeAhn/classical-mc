@@ -16,7 +16,7 @@ function generate_sim_anneal_script(julia_script, params_file_runtime, account)
     #SBATCH --mem-per-cpu=$(params["sim_anneal"]["job"]["mem_per_cpu"])
     #SBATCH --time=$(params["sim_anneal"]["job"]["time"])
     #SBATCH --job-name=$(params["sim_anneal"]["job"]["job_name"])
-    #SBATCH --output=/scratch/antony/slurm_out/slurm_%j.out
+    #SBATCH --output=/scratch/antony/slurm_out/%j.out
     #SBATCH --mail-user=t.an@mail.utoronto.ca
     #SBATCH --mail-type=ALL
 
@@ -46,7 +46,7 @@ function generate_parallel_temper_script(julia_script, params_file_runtime, acco
     #SBATCH --mem-per-cpu=$(params["parallel_temper"]["job"]["mem_per_cpu"])
     #SBATCH --time=$(params["parallel_temper"]["job"]["time"])
     #SBATCH --job-name=$(params["parallel_temper"]["job"]["job_name"])
-    #SBATCH --output=/scratch/antony/slurm_out/slurm_%j.out
+    #SBATCH --output=/scratch/antony/slurm_out/%j.out
     #SBATCH --mail-user=t.an@mail.utoronto.ca
     #SBATCH --mail-type=ALL
 
@@ -70,21 +70,50 @@ function generate_theta_sweep_script(julia_script, params_file_runtime, account)
     theta_max = params["theta_max"]
     N_theta = params["N_theta"]
     
+    cpus_per_node = 192  # Check with: sinfo --Node --long
+    cpus_per_theta = N_h  # e.g., 64
+    thetas_per_node = div(cpus_per_node, cpus_per_theta)  # e.g., 192 ÷ 64 = 3
+    N_array_jobs = ceil(Int, N_theta / thetas_per_node)
+
     return """
     #!/bin/bash
     #SBATCH --account=$account
-    #SBATCH --array=0-$(N_theta-1)
-    #SBATCH --ntasks=$N_h
+    #SBATCH --array=0-$(N_array_jobs-1)
+    #SBATCH --nodes=1
+    #SBATCH --ntasks-per-node=$(thetas_per_node * cpus_per_theta)
     #SBATCH --cpus-per-task=1
-    #SBATCH --mem-per-cpu=$(params["sim_anneal"]["job"]["mem_per_cpu"])
+    #SBATCH --mem=0  # Request all memory on the node
     #SBATCH --time=$(params["sim_anneal"]["job"]["time"])
     #SBATCH --job-name=$(params["sim_anneal"]["job"]["job_name"])_array
-    #SBATCH --output=/scratch/antony/slurm_out/slurm_%A_%a.out
+    #SBATCH --output=/scratch/antony/slurm_out/%A_%a_node.out
     #SBATCH --mail-user=t.an@mail.utoronto.ca
     #SBATCH --mail-type=ALL
 
     module load StdEnv/2023 julia/1.11.3
-    srun julia --project=/home/antony/classical-mc $julia_script --params_file $params_file_runtime --theta_index \$SLURM_ARRAY_TASK_ID
+
+    # Configuration
+    CPUS_PER_THETA=$cpus_per_theta
+    THETAS_PER_NODE=$thetas_per_node
+    N_THETA=$N_theta
+
+    # Calculate which theta indices this node should process
+    START_IDX=\$((SLURM_ARRAY_TASK_ID * THETAS_PER_NODE))
+
+    # Launch multiple jobs in parallel on this node
+    for i in \$(seq 0 \$((THETAS_PER_NODE - 1))); do
+        THETA_IDX=\$((START_IDX + i))
+        
+        if [ \$THETA_IDX -lt \$N_THETA ]; then
+            # Launch each theta job with its own CPUs and output file, backgrounded
+            srun --ntasks=\$CPUS_PER_THETA --exclusive --mem-per-cpu=$(params["sim_anneal"]["job"]["mem_per_cpu"]) \
+                --output=/scratch/antony/slurm_out/slurm_%A_theta\${THETA_IDX}.out \
+                julia --project=/home/antony/classical-mc $julia_script \
+                --params_file $params_file_runtime --theta_index \$THETA_IDX &
+        fi
+    done
+
+    # Wait for all background jobs to complete
+    wait
     """
 end
 

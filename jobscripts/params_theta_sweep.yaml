@@ -11,16 +11,17 @@ K: #cubic interaction strength (real and imaginary parts)
   - 0.05
   - 0.00
 #external magnetic field parameters
-theta_min: -0.0
-theta_max: 2.0
-N_theta: 3
+theta_min: -89.0
+theta_max: 90.0
+N_theta: 180
 h_sweep_args:
   - 0.1
   - 16.75
 N_h: 64
+hhl_tilt: 10.0 #tilt angle of hhl plane about [111] axis (degrees)
 delta_12: #quadratic zeeman coupling constants
-  - 0.0
-  - 0.0
+  - 0.00
+  - 0.00
 #disorder (random transverse field) parameters
 disorder_strength: 0.0
 disorder_seed: 123456
@@ -29,16 +30,16 @@ sim_anneal:
   job:
     time: "2:00:00"
     mem_per_cpu: "1000M"
-    job_name: "theta"
-  file_prefix: "test_Jzz=2.0_piflux_K=0.05"
-  results_dir: "../sim_anneal_out" #temporary storage
-  save_dir: "../theta_sweep" #final storage
+    job_name: "cubic_theta"
+  file_prefix: "K=0.05"
+  results_dir: "/scratch/antony/sim_anneal_out" #temporary storage
+  save_dir: "/scratch/antony/theta_sweep" #final storage
   mc_params:
-    N_therm: 500000
+    N_therm: 1000000
     overrelax_rate: 10
     N_det: 0
   T_args: #temperature schedule
-    - 0.02
+    - 0.002
     - 2.0
   #save configurations at low T for use as initial conditions
   save_configs: false

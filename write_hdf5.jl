@@ -30,7 +30,7 @@ function write_all(path::String, mc::Simulation)
 end
 
 #writes measurements to a file
-function write_observables(path::String, mc::Simulation)
+function write_observables(path::String, mc::Simulation, spin_config::Matrix{Float64}=zeros(0,0))
     obs = mc.observables
     file = h5open(path, "w")
     
@@ -56,6 +56,10 @@ function write_observables(path::String, mc::Simulation)
     file["binder_err"] = dbinder
     file["dSdT"] = susc_T
     file["dSdT_err"] = dsusc_T
+
+    if spin_config !== zeros(0,0)
+        file["spins"] = spin_config
+    end
 
     close(file)
 end
@@ -115,7 +119,8 @@ function collect_hsweep(results_dir::String, file_prefix::String, save_dir::Stri
     obs_dict = Dict("magnetization"=>N_h, "magnetization_err"=>N_h, "energy"=>N_h, "energy_err"=>N_h, 
                     "specific_heat"=>N_h, "specific_heat_err"=>N_h,
                     "susceptibility"=>N_h, "susceptibility_err"=>N_h, "binder"=>N_h, "binder_err"=>N_h,  
-                    "avg_spin"=>(N_h,3,4), "avg_spin_err"=>(N_h,3,4), "dSdT"=>(N_h,3,4), "dSdT_err"=>(N_h,3,4))
+                    "avg_spin"=>(N_h,3,4), "avg_spin_err"=>(N_h,3,4), "dSdT"=>(N_h,3,4), "dSdT_err"=>(N_h,3,4),
+                    "spins"=>(N_h, size(system.spins, 1), size(system.spins, 2)))
     
     for rank in 0:(N_ranks-1)
         #all as a function of magnetic field h
@@ -169,7 +174,7 @@ function collect_theta_sweep(results_dir::String, file_prefix::String, save_dir:
     raw_files = readdir(results_dir, join=false, sort=false)
     theta_values = range(theta_min, theta_max, length=N_theta)
     for theta in theta_values
-        fname = file_prefix*"$(theta)_hsweep.h5"
+        fname = file_prefix*"_theta=$(theta)_hsweep.h5"
         if fname in raw_files
             continue
         else
@@ -182,7 +187,7 @@ function collect_theta_sweep(results_dir::String, file_prefix::String, save_dir:
     theta_values = range(theta_min, theta_max, length=N_theta)
     file["theta_values"] = Vector(theta_values)
     for theta in theta_values
-        fname = file_prefix*"$(theta)_hsweep.h5"
+        fname = file_prefix*"_theta=$(theta)_hsweep.h5"
         if fname in raw_files
             fid=h5open(joinpath(results_dir,fname),"r")
             
@@ -197,6 +202,6 @@ function collect_theta_sweep(results_dir::String, file_prefix::String, save_dir:
             println("file for theta=$(theta) not found!")
         end 
     end
-    println("Saved collected data to ", joinpath(save_dir, file_prefix*"$(theta_min)to$(theta_max)_sweep.h5"))
+    println("Saved collected data to ", joinpath(save_dir, file_prefix*"_$(theta_min)to$(theta_max).h5"))
     close(file)
 end

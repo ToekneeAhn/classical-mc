@@ -21,10 +21,8 @@ if parsed_args["theta_index"] !== nothing #theta sweep job
     theta_index = parsed_args["theta_index"] + 1
     theta_sweep = range(params["theta_min"], params["theta_max"], params["N_theta"])
     h_theta = theta_sweep[theta_index]
-    file_prefix = params["sim_anneal"]["file_prefix"] * "_theta=$(h_theta)_h"
 else #normal simulated annealing job
     h_theta = params["h_theta"]
-    file_prefix = params["sim_anneal"]["file_prefix"]
 end
 
 N = params["N_uc"]
@@ -35,7 +33,6 @@ K = params["K"][1] + im * params["K"][2]
 h_sweep_args = params["h_sweep_args"]
 N_h = params["N_h"]
 delta_12 = params["delta_12"]
-breaking_field = params["breaking_field"]
 disorder_strength = params["disorder_strength"]
 disorder_seed = params["disorder_seed"]
 
@@ -47,8 +44,14 @@ T_args = params_sa["T_args"]
 save_configs = params_sa["save_configs"]
 results_dir = params_sa["results_dir"]
 save_dir = params_sa["save_dir"]
+file_prefix = params["sim_anneal"]["file_prefix"] 
+hhl_tilt = params["hhl_tilt"]
 
-h_direction = [1.0,1.0,1.0]/sqrt(3) .* cos(h_theta * pi/180) .+ [1.0,1.0,-2.0]/sqrt(6) .* sin(h_theta * pi/180)
+#h_direction = [1.0,1.0,1.0]/sqrt(3) .* cos(h_theta * pi/180) .+ [1.0,1.0,-2.0]/sqrt(6) .* sin(h_theta * pi/180)
+n_1 = [1.0, 1.0, 1.0] / sqrt(3)
+n_2 = 1/sqrt(6) * [cos(hhl_tilt * pi/180) - sqrt(3)*sin(hhl_tilt * pi/180), cos(hhl_tilt * pi/180) + sqrt(3)*sin(hhl_tilt * pi/180), -2 * cos(hhl_tilt * pi/180)]
+h_direction = n_1 * cos(h_theta * pi/180) .+ n_2 * sin(h_theta * pi/180)
+
 h_min, h_max = h_sweep_args
 h_sweep = range(h_min, h_max, N_h)
 #h_index defined below by MPI rank
@@ -94,7 +97,7 @@ unique_triplets, unique_H_cubic_vals = unique_cubic_triplets(K, N, N_sites)
 pairs_i, pairs_j, pairs_k = cubic_pairs_split_all(cubic_sites, N_sites)
 H_cubic_sparse = cubic_tensors_sparse_all(K, N, N_sites)
 
-zeeman = zeeman_field_random(h, z_local, local_interactions, delta_12, disorder_strength, N_sites, disorder_seed, breaking_field)
+zeeman = zeeman_field_random(h, z_local, local_interactions, delta_12, disorder_strength, N_sites, disorder_seed)
 
 if include_cubic
     system = SpinSystem(spins, S, N, N_sites, Js, h, delta_12, disorder_strength, neighbours, H_bilinear, K, cubic_sites, H_cubic_sparse, unique_triplets, unique_H_cubic_vals, pairs_i, pairs_j, pairs_k, zeeman)
@@ -108,8 +111,8 @@ else
     end
 end
 
-params = MCParams(N_therm, N_det, overrelax_rate, -1, -1, -1, -1)
-simulation = Simulation(system, T_f, params, Observables(), 0, "none")
+mc_params = MCParams(N_therm, N_det, overrelax_rate, -1, -1, -1, -1)
+simulation = Simulation(system, T_f, mc_params, Observables(), 0, "none")
 
 if r == 0    
     #makes save directories if they doesn't exist
@@ -126,20 +129,23 @@ if save_configs
     #saves at specified temperatures during annealing
     _, configurations_save = sim_anneal!(simulation, t-> T_i * 0.9^t, temp_save, false)
     #how should we do this...
-    write_collection_sim_anneal(joinpath(save_dir, save_configs_prefix)*"$(h_index).h5", configurations_save, params, system, temp_save, h_direction, [norm(h)], disorder_seed)
+    write_collection_sim_anneal(joinpath(save_dir, save_configs_prefix)*"$(h_index).h5", configurations_save, mc_params, system, temp_save, h_direction, [norm(h)], disorder_seed)
 else
     sim_anneal!(simulation, t-> T_i * 0.9^t, Float64[], r == 0 ? true : false)
 end
 
 #writes measurements to a file
-fname=file_prefix*"$(h_index)_0.h5"
+fname=file_prefix*"_theta=$(h_theta)_h$(h_index)_0.h5" #trailing _0 for compatibility with pt naming and collect_hsweep()
 write_observables(joinpath(results_dir,fname), simulation)
 MPI.Barrier(comm) #barrier in case 
 
 #collect results about T_f when sweep finished
 if r == 0
-    collect_hsweep(results_dir, file_prefix, save_dir, system, params, [T_f], h_direction, Vector(h_sweep), disorder_seed)
-    #make better
-    #collect_theta_sweep("/scratch/antony/theta_sweep", "Jzz=1.0_topright_hhltheta=", "/scratch/antony/theta_sweep", -90.0, 90.0, 181)
+    if parsed_args["theta_index"] !== nothing
+        collect_hsweep(results_dir, file_prefix*"_theta=$(h_theta)_h", save_dir, system, mc_params, [T_f], h_direction, Vector(h_sweep), disorder_seed)
+        collect_theta_sweep(results_dir, file_prefix, save_dir, params["theta_min"], params["theta_max"], params["N_theta"]) #check correctness
+    else
+        collect_hsweep(results_dir, file_prefix, save_dir, system, mc_params, [T_f], h_direction, Vector(h_sweep), disorder_seed)
+    end
 end
 

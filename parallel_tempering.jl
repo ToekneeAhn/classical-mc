@@ -29,7 +29,6 @@ h_theta = params["h_theta"]
 h_sweep_args = params["h_sweep_args"]
 N_h = params["N_h"]
 delta_12 = params["delta_12"]
-breaking_field = params["breaking_field"]
 disorder_strength = params["disorder_strength"]
 disorder_seed = params["disorder_seed"]
 
@@ -46,8 +45,14 @@ load_configs_prefix = params_pt["load_configs_prefix"]
 results_dir = params_pt["results_dir"]
 save_dir = params_pt["save_dir"]
 file_prefix = params_pt["file_prefix"]
+save_configs = params_pt["save_configs"]
+hhl_tilt = params["hhl_tilt"]
 
-h_direction = [1.0,1.0,1.0]/sqrt(3) .* cos(h_theta * pi/180) .+ [1.0,-1.0,0.0]/sqrt(2) .* sin(h_theta * pi/180)
+#h_direction = [1.0,1.0,1.0]/sqrt(3) .* cos(h_theta * pi/180) .+ [1.0,1.0,-2.0]/sqrt(6) .* sin(h_theta * pi/180)
+n_1 = [1.0, 1.0, 1.0] / sqrt(3)
+n_2 = 1/sqrt(6) * [cos(hhl_tilt * pi/180) - sqrt(3)*sin(hhl_tilt * pi/180), cos(hhl_tilt * pi/180) + sqrt(3)*sin(hhl_tilt * pi/180), -2 * cos(hhl_tilt * pi/180)]
+h_direction = n_1 * cos(h_theta * pi/180) .+ n_2 * sin(h_theta * pi/180)
+
 h_min, h_max = h_sweep_args
 h_sweep = range(h_min, h_max, N_h)
 
@@ -89,7 +94,7 @@ unique_triplets, unique_H_cubic_vals = unique_cubic_triplets(K, N, N_sites)
 pairs_i, pairs_j, pairs_k = cubic_pairs_split_all(cubic_sites, N_sites)
 H_cubic_sparse = cubic_tensors_sparse_all(K, N, N_sites)
 
-zeeman = zeeman_field_random(h, z_local, local_interactions, delta_12, disorder_strength, N_sites, disorder_seed, breaking_field)
+zeeman = zeeman_field_random(h, z_local, local_interactions, delta_12, disorder_strength, N_sites, disorder_seed)
 
 if include_cubic
     system = SpinSystem(spins_r, S, N, N_sites, Js, h, delta_12, disorder_strength, neighbours, H_bilinear, K, cubic_sites, H_cubic_sparse, unique_triplets, unique_H_cubic_vals, pairs_i, pairs_j, pairs_k, zeeman)
@@ -103,9 +108,9 @@ else
     end
 end
 
-params = MCParams(N_therm, -1, overrelax_rate, N_meas, probe_rate, replica_exchange_rate, optimize_temperature_rate)
+mc_params = MCParams(N_therm, -1, overrelax_rate, N_meas, probe_rate, replica_exchange_rate, optimize_temperature_rate)
 obs = Observables()
-simulation = Simulation(system, Ts[r+1], params, obs, r, "none") 
+simulation = Simulation(system, Ts[r+1], mc_params, obs, r, "none") 
 
 energies_r, accept_metropolis_r, accept_swap_r, flow_r = parallel_temper!(simulation, r, Ts, comm, comm_size)
 gather_accept_metropolis = MPI.Gather(accept_metropolis_r[1], comm, root=0)
@@ -135,7 +140,11 @@ end
 
 #writes measurements to a file
 fname=file_prefix*"$(h_index)_$(r).h5"
-write_observables(joinpath(results_dir,fname), simulation)
+if save_configs == true
+    write_observables(joinpath(results_dir,fname), simulation, system.spins)
+else
+    write_observables(joinpath(results_dir,fname), simulation)
+end
 MPI.Barrier(comm) #barrier in case 
 
 #collect results when sweep finished
@@ -145,7 +154,7 @@ if h_index == N_h
         if !isdir(save_dir)
             mkdir(save_dir)
         end
-        collect_hsweep(results_dir, file_prefix, save_dir, system, params, Ts, h_direction, Vector(h_sweep), disorder_seed)
+        collect_hsweep(results_dir, file_prefix, save_dir, system, mc_params, Ts, h_direction, Vector(h_sweep), disorder_seed)
     end
 end
 
