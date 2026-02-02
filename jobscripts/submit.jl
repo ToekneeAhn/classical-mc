@@ -63,6 +63,31 @@ function generate_parallel_temper_script(julia_script, params_file_runtime, acco
     """
 end
 
+function generate_theta_collection_script(params_file_runtime, account)
+    params = YAML.load_file(params_file_runtime)
+    theta_min = params["theta_min"]
+    theta_max = params["theta_max"]
+    N_theta = params["N_theta"]
+    
+    return """
+    #!/bin/bash
+    #SBATCH --account=$account
+    #SBATCH --ntasks=1
+    #SBATCH --cpus-per-task=1
+    #SBATCH --mem-per-cpu=4G
+    #SBATCH --time=00:15:00
+    #SBATCH --job-name=collect_theta
+    #SBATCH --output=/scratch/antony/slurm_out/%j_collect.out
+    #SBATCH --mail-user=t.an@mail.utoronto.ca
+    #SBATCH --mail-type=ALL
+
+    module load StdEnv/2023 julia/1.11.3
+
+    cd /home/antony/classical-mc
+    julia --project=/home/antony/classical-mc -e "include(\\\"metropolis_pyrochlore.jl\\\"); include(\\\"write_hdf5.jl\\\"); collect_theta_sweep(\\\"$(params["sim_anneal"]["save_dir"])\\\", \\\"$(params["sim_anneal"]["file_prefix"])\\\", \\\"$(params["sim_anneal"]["save_dir"])\\\", $theta_min, $theta_max, $N_theta)"
+    """
+end
+
 function generate_theta_sweep_script(julia_script, params_file_runtime, account)
     params = YAML.load_file(params_file_runtime)
     N_h = params["N_h"]
@@ -106,7 +131,7 @@ function generate_theta_sweep_script(julia_script, params_file_runtime, account)
         if [ \$THETA_IDX -lt \$N_THETA ]; then
             # Launch each theta job with its own CPUs and output file, backgrounded
             srun --ntasks=\$CPUS_PER_THETA --exclusive --mem-per-cpu=$(params["sim_anneal"]["job"]["mem_per_cpu"]) \
-                --output=/scratch/antony/slurm_out/slurm_%A_theta\${THETA_IDX}.out \
+                --output=/scratch/antony/slurm_out/%A_theta\${THETA_IDX}.out \
                 julia --project=/home/antony/classical-mc $julia_script \
                 --params_file $params_file_runtime --theta_index \$THETA_IDX &
         fi
@@ -162,6 +187,10 @@ elseif job_type == "theta_sweep"
     slurm_script = generate_theta_sweep_script(julia_script, params_file_runtime, account)
     slurm_filename = "$(submit_dir)/submit_theta.sh"
     
+    # Also generate collection script
+    collection_script = generate_theta_collection_script(params_file_runtime, account)
+    collection_filename = "$(submit_dir)/submit_theta_collect.sh"
+    
 else
     error("Unknown job type: $job_type")
 end
@@ -170,13 +199,30 @@ end
 open(slurm_filename, "w") do f
     write(f, slurm_script)
 end
-
 run(`chmod +x $(slurm_filename)`)
+
 cd(submit_dir)
 
 try
+    # Submit main job
     output = read(`sbatch $(slurm_filename)`, String)
     println(output)
+    
+    # For theta_sweep, also submit dependent collection job
+    if job_type == "theta_sweep"
+        # Extract job ID from output (format: "Submitted batch job 12345")
+        job_id = match(r"(\d+)", output).match
+        
+        # Write collection script
+        open(collection_filename, "w") do f
+            write(f, collection_script)
+        end
+        run(`chmod +x $(collection_filename)`)
+        
+        # Submit collection job with dependency
+        collection_output = read(`sbatch --dependency=afterok:$(job_id) $(collection_filename)`, String)
+        println("Collection job: ", collection_output)
+    end
 catch e
     println("Error submitting job: $(e)")
 end

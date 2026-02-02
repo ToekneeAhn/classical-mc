@@ -130,6 +130,7 @@ function collect_hsweep(results_dir::String, file_prefix::String, save_dir::Stri
         end
     end
 
+    println("Saved $N_h h points at $N_ranks temperature points to ", joinpath(save_dir, file_prefix*"sweep.h5"))
     close(file)
 end
 
@@ -182,7 +183,7 @@ function collect_theta_sweep(results_dir::String, file_prefix::String, save_dir:
         end
     end
 
-    file = h5open(joinpath(save_dir, file_prefix*"$(theta_min)to$(theta_max)_sweep.h5"), "w")
+    file = h5open(joinpath(save_dir, file_prefix*"_$(theta_min)to$(theta_max).h5"), "w")
 
     theta_values = range(theta_min, theta_max, length=N_theta)
     file["theta_values"] = Vector(theta_values)
@@ -202,6 +203,6 @@ function collect_theta_sweep(results_dir::String, file_prefix::String, save_dir:
             println("file for theta=$(theta) not found!")
         end 
     end
-    println("Saved collected data to ", joinpath(save_dir, file_prefix*"_$(theta_min)to$(theta_max).h5"))
+    println("Saved $N_theta theta points to ", joinpath(save_dir, file_prefix*"_$(theta_min)to$(theta_max).h5"))
     close(file)
 end

@@ -143,7 +143,7 @@ MPI.Barrier(comm) #barrier in case
 if r == 0
     if parsed_args["theta_index"] !== nothing
         collect_hsweep(results_dir, file_prefix*"_theta=$(h_theta)_h", save_dir, system, mc_params, [T_f], h_direction, Vector(h_sweep), disorder_seed)
-        collect_theta_sweep(results_dir, file_prefix, save_dir, params["theta_min"], params["theta_max"], params["N_theta"]) #check correctness
+        #runs in job-dependent script after: collect_theta_sweep(save_dir, file_prefix, save_dir, params["theta_min"], params["theta_max"], params["N_theta"]) 
     else
         collect_hsweep(results_dir, file_prefix, save_dir, system, mc_params, [T_f], h_direction, Vector(h_sweep), disorder_seed)
     end
