@@ -135,17 +135,25 @@ else
 end
 
 #writes measurements to a file
-fname=file_prefix*"_theta=$(h_theta)_h$(h_index)_0.h5" #trailing _0 for compatibility with pt naming and collect_hsweep()
-write_observables(joinpath(results_dir,fname), simulation)
+if parsed_args["theta_index"] !== nothing
+    file_append = "_theta=$(h_theta)_h$(h_index)_0.h5" #trailing _0 for compatibility with pt naming and collect_hsweep()
+    parameters_path = joinpath(results_dir, file_prefix*"_theta=$(h_theta)_parameters.h5")
+else
+    file_append = "_h$(h_index)_0.h5" 
+    parameters_path = joinpath(results_dir, file_prefix*"_parameters.h5")
+end
+
+write_observables(joinpath(results_dir, file_prefix*file_append), simulation)
 MPI.Barrier(comm) #barrier in case 
 
 #collect results about T_f when sweep finished
 if r == 0
+    write_parameters(parameters_path, system, mc_params, [T_f], h_direction, Vector(h_sweep), disorder_seed)
     if parsed_args["theta_index"] !== nothing
-        collect_hsweep(results_dir, file_prefix*"_theta=$(h_theta)_h", save_dir, system, mc_params, [T_f], h_direction, Vector(h_sweep), disorder_seed)
+        collect_hsweep(results_dir, file_prefix*"_theta=$(h_theta)_h", save_dir, parameters_path)
         #runs in job-dependent script after: collect_theta_sweep(save_dir, file_prefix, save_dir, params["theta_min"], params["theta_max"], params["N_theta"]) 
     else
-        collect_hsweep(results_dir, file_prefix, save_dir, system, mc_params, [T_f], h_direction, Vector(h_sweep), disorder_seed)
+        collect_hsweep(results_dir, file_prefix*"_h", save_dir, parameters_path)
     end
 end
 

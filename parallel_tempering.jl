@@ -147,14 +147,10 @@ else
 end
 MPI.Barrier(comm) #barrier in case 
 
-#collect results when sweep finished
-if h_index == N_h
-    MPI.Barrier(comm) #barrier in case 
+
+#write one parameters file since h_direction remains constant throughout h sweep
+if h_index == 1
     if r == 0
-        if !isdir(save_dir)
-            mkdir(save_dir)
-        end
-        collect_hsweep(results_dir, file_prefix, save_dir, system, mc_params, Ts, h_direction, Vector(h_sweep), disorder_seed)
+        write_parameters(joinpath(results_dir, file_prefix*"_parameters.h5"), system, mc_params, Ts, h_direction, Vector(h_sweep), disorder_seed)
     end
 end
-
