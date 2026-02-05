@@ -21,19 +21,19 @@ delta_12: #quadratic zeeman coupling constants
   - 0.0
   - 0.0
 #disorder (random transverse field) parameters
-disorder_strength: 0.1
+disorder_strength: 0.05
 disorder_seed: 123456
 #monte carlo simulation parameters
 sim_anneal:
   job:
-    time: "1:00:00"
+    time: "5:00:00"
     mem_per_cpu: "1000M"
-    job_name: "theta=90.0"
-  file_prefix: "test_simanneal_h"
+    job_name: "test"
+  file_prefix: "testsimanneal"
   results_dir: "/scratch/antony/sim_anneal_out" #temporary storage
-  save_dir: "/scratch/antony/theta_sweep" #final storage
+  save_dir: "/scratch/antony/testing" #final storage
   mc_params:
-    N_therm: 1000000
+    N_therm: 100000
     overrelax_rate: 10
     N_det: 0
   T_args: #temperature schedule
@@ -48,23 +48,24 @@ sim_anneal:
   save_configs_prefix: "/scratch/antony/pt_collect/save_config/Jpm=0_Jpmpm+_h"
 parallel_temper:
   job:
-    time: "14:00:00"
+    time: "6:00:00"
     mem_per_cpu: "2500M"
-    job_name: "L6_disorder=0.1"
+    job_name: "L6_disorder=0.05_array"
+    h_points_per_node: 8
   mc_params:
     N_therm: 200000
     overrelax_rate: 10
-    N_meas: 800000
-    probe_rate: 200
+    N_meas: 1000000
+    probe_rate: 400
     replica_exchange_rate: 50
     optimize_temperature_rate: 20000000
   load_configs: false #load saved temperatures and configurations
   load_configs_prefix: "/scratch/antony/pt_collect/save_config/Jpm+_Jpmpm-_h"
-  T_args: #otherwise use the following temperature range with NTs ranks
+  T_args: #otherwise use the following temperature range with N_Ts ranks
     - 0.001
     - 1.0
   N_Ts: 192
-  file_prefix: "L6_Jpm=-0.3_disorder=0.1_h"
+  file_prefix: "L6_disorder=0.05"
   results_dir: "/scratch/antony/pt_out" #temporary storage
-  save_dir: "/scratch/antony/pt_collect" #final storage
+  save_dir: "/scratch/antony/pt_collect/fss" #final storage
   save_configs: true #save final spin configuration at each temperature
