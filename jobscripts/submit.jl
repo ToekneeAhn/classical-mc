@@ -22,6 +22,7 @@ function generate_sim_anneal_script(julia_script, params_file_runtime, account)
 
     module purge
     module load StdEnv/2023 julia/1.11.3
+    export PMIX_MCA_psec=native
 
     srun julia --project=/home/antony/classical-mc $julia_script --params_file $params_file_runtime
 
@@ -37,11 +38,13 @@ function generate_parallel_temper_script_single_node(julia_script, params_file_r
     results_dir = params["parallel_temper"]["results_dir"]
     file_prefix = params["parallel_temper"]["file_prefix"]
     
+    N_nodes = ceil(Int, N_Ts / 192)
+
     return """
     #!/bin/bash
     #SBATCH --account=$account
-    #SBATCH --nodes=1
-    #SBATCH --ntasks-per-node=$N_Ts
+    #SBATCH --nodes=$N_nodes
+    #SBATCH --ntasks=$N_Ts
     #SBATCH --cpus-per-task=1
     #SBATCH --mem-per-cpu=$(params["parallel_temper"]["job"]["mem_per_cpu"])
     #SBATCH --time=$(params["parallel_temper"]["job"]["time"])
@@ -52,6 +55,7 @@ function generate_parallel_temper_script_single_node(julia_script, params_file_r
 
     module purge
     module load StdEnv/2023 julia/1.11.3
+    export PMIX_MCA_psec=native
 
     for ((i=1; i<=$N_h; i++));
     do
@@ -67,14 +71,16 @@ function generate_parallel_temper_script(julia_script, params_file_runtime, acco
     results_dir = params["parallel_temper"]["results_dir"]
     file_prefix = params["parallel_temper"]["file_prefix"]
 
-    N_nodes = ceil(Int, N_h / h_points_per_node)
-    
+    N_jobarray = ceil(Int, N_h / h_points_per_node)
+    N_nodes = ceil(Int, N_Ts / 192)
+    N_Ts_per_node = ceil(Int, N_Ts / N_nodes)
+
     return """
     #!/bin/bash
     #SBATCH --account=$account
-    #SBATCH --array=0-$(N_nodes-1)
-    #SBATCH --nodes=1
-    #SBATCH --ntasks-per-node=$N_Ts
+    #SBATCH --array=0-$(N_jobarray-1)
+    #SBATCH --nodes=$N_nodes
+    #SBATCH --ntasks-per-node=$N_Ts_per_node
     #SBATCH --cpus-per-task=1
     #SBATCH --mem-per-cpu=$(params["parallel_temper"]["job"]["mem_per_cpu"])
     #SBATCH --time=$(params["parallel_temper"]["job"]["time"])
@@ -85,6 +91,7 @@ function generate_parallel_temper_script(julia_script, params_file_runtime, acco
 
     module purge
     module load StdEnv/2023 julia/1.11.3
+    export PMIX_MCA_psec=native
 
     N_H=$N_h
     H_POINTS_PER_NODE=$h_points_per_node
@@ -118,13 +125,14 @@ function generate_parallel_temper_collection_script(params_file_runtime, account
     #SBATCH --ntasks=1
     #SBATCH --cpus-per-task=1
     #SBATCH --mem-per-cpu=4000M
-    #SBATCH --time=00:15:00
+    #SBATCH --time=1:00:00
     #SBATCH --job-name=collect_pt
     #SBATCH --output=/scratch/antony/slurm_out/%j_collect.out
     #SBATCH --mail-user=t.an@mail.utoronto.ca
     #SBATCH --mail-type=ALL
 
     module load StdEnv/2023 julia/1.11.3
+    export PMIX_MCA_psec=native
 
     # run collection script
     cd /home/antony/classical-mc
@@ -164,6 +172,7 @@ function generate_theta_collection_script(params_file_runtime, account)
     #SBATCH --mail-type=ALL
 
     module load StdEnv/2023 julia/1.11.3
+    export PMIX_MCA_psec=native
 
     # run collection script
     cd /home/antony/classical-mc
@@ -205,6 +214,7 @@ function generate_theta_sweep_script(julia_script, params_file_runtime, account)
     #SBATCH --mail-type=ALL
 
     module load StdEnv/2023 julia/1.11.3
+    export PMIX_MCA_psec=native
 
     # Configuration
     CPUS_PER_THETA=$cpus_per_theta
