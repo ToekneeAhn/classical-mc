@@ -4,12 +4,12 @@ S: 0.5 #spin length
 Js: #exchange coupling constants
   - 2.0
   - -0.5
-  - 0.02
+  - 0.01
   - 0.0
-include_cubic: true #whether to include cubic spin interaction S^z S^+ S^z
+include_cubic: false #whether to include cubic spin interaction S^z S^+ S^z
 K: #cubic interaction strength (real and imaginary parts)
-  - 0.05
-  - 0.00
+  - 0.0
+  - 0.0
 #external magnetic field parameters
 theta_min: -89.0
 theta_max: 90.0
@@ -18,10 +18,10 @@ h_sweep_args:
   - 0.1
   - 16.75
 N_h: 64
-hhl_tilt: 10.0 #tilt angle of hhl plane about [111] axis (degrees)
+hhl_tilt: 2.0 #tilt angle of hhl plane about [111] axis (degrees)
 delta_12: #quadratic zeeman coupling constants
-  - 0.00
-  - 0.00
+  - 0.002
+  - 0.002
 #disorder (random transverse field) parameters
 disorder_strength: 0.0
 disorder_seed: 123456
@@ -30,8 +30,8 @@ sim_anneal:
   job:
     time: "2:00:00"
     mem_per_cpu: "1000M"
-    job_name: "cubic_theta"
-  file_prefix: "K=0.05"
+    job_name: "piflux_delta++_tilt=2"
+  file_prefix: "piflux_delta=++0.002_tilt=2"
   results_dir: "/scratch/antony/sim_anneal_out" #temporary storage
   save_dir: "/scratch/antony/theta_sweep" #final storage
   mc_params:

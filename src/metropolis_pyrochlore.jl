@@ -1,26 +1,8 @@
 using LinearAlgebra, StaticArrays, BinningAnalysis, Random, MPI
 using Interpolations, ForwardDiff, Integrals, Printf 
 
-include("observables.jl")
-
-#local z axis on sublattice m in in column m+1
-z_local = 1/sqrt(3)*[1 1 1; 1 -1 -1; -1 1 -1; -1 -1 1]'
-
-#local dipole moments. for non-kramers, only the z component is dipolar
-local_interactions = 1.0 .* [0 0 1; 0 0 1; 0 0 1; 0 0 1]'
-
-#bond-dependent gamma factor
-omega = exp(2*pi*im/3)
-gamma_ij = [0 1 omega omega^2; 1 0 omega^2 omega; omega omega^2 0 1; omega^2 omega 1 0]
-
-local_1 = [-2/sqrt(6) 1/sqrt(6) 1/sqrt(6); 0 -1/sqrt(2) 1/sqrt(2); 1/sqrt(3) 1/sqrt(3) 1/sqrt(3)]'
-local_2 = [-2/sqrt(6) -1/sqrt(6) -1/sqrt(6); 0 1/sqrt(2) -1/sqrt(2); 1/sqrt(3) -1/sqrt(3) -1/sqrt(3)]'
-local_3 = [2/sqrt(6) 1/sqrt(6) -1/sqrt(6); 0 -1/sqrt(2) -1/sqrt(2); -1/sqrt(3) 1/sqrt(3) -1/sqrt(3)]'
-local_4 = [2/sqrt(6) -1/sqrt(6) 1/sqrt(6); 0 1/sqrt(2) 1/sqrt(2); -1/sqrt(3) -1/sqrt(3) 1/sqrt(3)]'
-local_bases = [Matrix{Float64}(local_1), Matrix{Float64}(local_2), Matrix{Float64}(local_3), Matrix{Float64}(local_4)]
-
 function local_to_global(spin_local::Vector{Float64}, mu::Int64)::Vector{Float64}
-    return local_bases[mu] * spin_local
+    return LOCAL_BASES[mu] * spin_local
 end
 
 #sublattice-indexed pyrochlore coordinates (sipc)
@@ -218,7 +200,7 @@ function unique_cubic_triplets(K::Complex{Float64}, N::Int64, N_sites::Int64)
                 sub_i = get_sublattice(i, N)
                 sub_j = get_sublattice(j, N)
                 sub_k = get_sublattice(k, N)
-                phase = gamma_ij[sub_i, sub_j] * gamma_ij[sub_j, sub_k]
+                phase = GAMMA_IJ[sub_i, sub_j] * GAMMA_IJ[sub_j, sub_k]
     
                 push!(K_vals, (2*real(K * phase), -2*imag(K * phase)))
             end
@@ -240,7 +222,7 @@ function cubic_tensors_sparse_all(K::Complex{Float64}, N::Int64, N_sites::Int64)
             sub_j = get_sublattice(j, N)
             sub_k = get_sublattice(k, N)
             
-            phase = gamma_ij[sub_i, sub_j] * gamma_ij[sub_j, sub_k]
+            phase = GAMMA_IJ[sub_i, sub_j] * GAMMA_IJ[sub_j, sub_k]
             K_313 = 2*real(K * phase)
             K_323 = -2*imag(K * phase)
             push!(tensors_n, (K_313, K_323))
@@ -264,7 +246,7 @@ function cubic_tensors_all(K::Complex{Float64}, N::Int64, N_sites::Int64)::Vecto
             sub_j = get_sublattice(j, N)
             sub_k = get_sublattice(k, N)
 
-            phase = gamma_ij[sub_i, sub_j] * gamma_ij[sub_j, sub_k] #i hope this is correct lol
+            phase = GAMMA_IJ[sub_i, sub_j] * GAMMA_IJ[sub_j, sub_k] #i hope this is correct lol
             K_cubic[3,1,3] = 2*real(K * phase)
             K_cubic[3,2,3] = -2*imag(K * phase)
             
@@ -318,7 +300,7 @@ function H_bilinear_all(Js::Vector{Float64}, N::Int64, N_sites::Int64)
                 begin
                     sub_i = get_sublattice(n, N)
                     sub_j = get_sublattice(neighbours_n[m], N)
-                    gamma = gamma_ij[sub_i, sub_j]
+                    gamma = GAMMA_IJ[sub_i, sub_j]
                     zeta = -conj(gamma)
                     
                     if sub_i != sub_j
@@ -341,7 +323,7 @@ function zeeman_field_random(h, z_local, local_interactions, delta_12, G, N_site
     zeeman_eff = NTuple{3,Float64}[]
     for mu in 1:4
         h_z = (h' * z_local[:, mu]) .* local_interactions[:, mu]
-        h_mu = local_bases[mu]' * h
+        h_mu = LOCAL_BASES[mu]' * h
         h_xy_quadratic = delta_12[1] .* (h_mu[1] * h_mu[3], h_mu[2] * h_mu[3], 0.0) .+ delta_12[2] .* (h_mu[2]^2 - h_mu[1]^2, 2.0 *h_mu[1] * h_mu[2], 0.0)
         h_xy_breaking = breaking_field[mu]
 
@@ -588,7 +570,7 @@ function sim_anneal!(mc::Simulation, schedule::Function, output_temp::Vector{Flo
     #each simulated annealing run constitutes one measurement (at the end)
     E = E_pyro(mc.spin_system)
     avg_spin = spin_expec(mc.spin_system.spins, N)
-    m = norm(magnetization_global(avg_spin, local_bases, mc.spin_system.h))
+    m = norm(magnetization_global(avg_spin, LOCAL_BASES, mc.spin_system.h))
 
     push!(mc.observables.energy, E, E^2)
     push!(mc.observables.magnetization, m, m^2, m^4)
@@ -644,7 +626,7 @@ function parallel_temper!(mc::Simulation, rank::Int64, temp::Vector{Float64}, co
         if sweep > N_therm && sweep % probe_rate == 0
             #take measurements after thermalization every probe_rate sweeps
             avg_spin = spin_expec(mc.spin_system.spins, N)
-            m = norm(magnetization_global(avg_spin, local_bases, mc.spin_system.h))
+            m = norm(magnetization_global(avg_spin, LOCAL_BASES, mc.spin_system.h))
             #do we have to use norm(m)? 
 
             push!(mc.observables.energy, E, E^2)

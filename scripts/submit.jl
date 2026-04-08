@@ -136,7 +136,7 @@ function generate_parallel_temper_collection_script(params_file_runtime, account
 
     # run collection script
     cd /home/antony/classical-mc
-    julia --project=/home/antony/classical-mc -e "include(\\\"metropolis_pyrochlore.jl\\\"); include(\\\"write_hdf5.jl\\\"); collect_hsweep(\\\"$results_dir\\\", \\\"$file_prefix\\\", \\\"$save_dir\\\", \\\"$parameters_path\\\")"
+    julia --project=/home/antony/classical-mc -e "using PyroClassicalMC; collect_hsweep(\\\"$results_dir\\\", \\\"$file_prefix\\\", \\\"$save_dir\\\", \\\"$parameters_path\\\")"
 
     # clean up
     cd $results_dir
@@ -176,7 +176,7 @@ function generate_theta_collection_script(params_file_runtime, account)
 
     # run collection script
     cd /home/antony/classical-mc
-    julia --project=/home/antony/classical-mc -e "include(\\\"metropolis_pyrochlore.jl\\\"); include(\\\"write_hdf5.jl\\\"); collect_theta_sweep(\\\"$save_dir\\\", \\\"$file_prefix\\\", \\\"$collect_dir\\\", $theta_min, $theta_max, $N_theta)"
+    julia --project=/home/antony/classical-mc -e "using PyroClassicalMC; collect_theta_sweep(\\\"$save_dir\\\", \\\"$file_prefix\\\", \\\"$collect_dir\\\", $theta_min, $theta_max, $N_theta)"
 
     # clean up
     cd $results_dir
@@ -253,21 +253,22 @@ job_type = ARGS[1]
 account = length(ARGS) > 1 ? ARGS[2] : "def-ybkim" #rrg-ybkim on fir, def-ybkim by default
 
 # Common setup
-dir_name = basename(pwd())
+project_root = normpath(joinpath(@__DIR__, ".."))
+dir_name = basename(project_root)
 submit_dir = "/scratch/antony/$(dir_name)"
 params_dest_dir = "/scratch/antony/param_files"
 date_time = now()
 
 # Determine params file and script based on job type
 if job_type == "theta_sweep"
-    params_file = "params_theta_sweep.yaml"
+    params_file = joinpath(@__DIR__, "params_theta_sweep.yaml")
     params_file_runtime = "$(params_dest_dir)/params_theta_sweep_$(Dates.format(date_time, "yyyymmdd_HHMMSS")).yaml"
-    julia_script = "/home/antony/classical-mc/sim_anneal_runner.jl"
+    julia_script = joinpath(project_root, "scripts", "simulated_annealing.jl")
 else
-    params_file = "params.yaml"
+    params_file = joinpath(@__DIR__, "params.yaml")
     params_file_runtime = "$(params_dest_dir)/params_$(Dates.format(date_time, "yyyymmdd_HHMMSS")).yaml"
-    julia_script = job_type == "sim_anneal" ? "/home/antony/classical-mc/sim_anneal_runner.jl" : 
-                   "/home/antony/classical-mc/parallel_tempering.jl"
+    julia_script = job_type == "sim_anneal" ? joinpath(project_root, "scripts", "simulated_annealing.jl") :
+                   joinpath(project_root, "scripts", "parallel_tempering.jl")
 end
 
 cp(params_file, params_file_runtime)

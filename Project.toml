@@ -1,3 +1,7 @@
+name = "PyroClassicalMC"
+uuid = "f18880ac-9930-4021-aa75-fa84db384f91"
+version = "0.1.0"
+
 [deps]
 ArgParse = "c7e460c6-2fb9-53a9-8c5b-16f535851c63"
 BinningAnalysis = "b7192094-8e58-5052-a244-180a858778ee"
@@ -15,3 +19,6 @@ Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 YAML = "ddb6d928-2868-570f-bddf-ab3f9cf99eb6"
+
+[compat]
+julia = "1.9"
