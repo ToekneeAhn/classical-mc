@@ -1,7 +1,15 @@
 using HDF5, StaticArrays
 
+function ensure_parent_dir(path::String)
+    dir = dirname(path)
+    if !isdir(dir)
+        mkpath(dir)
+    end
+end
+
 #writes an array to an hdf5 file, with key keyname
 function write_single(path::String, arr::AbstractArray, keyname="spins")
+    ensure_parent_dir(path)
     h5open(path, "w") do file
         file[keyname] = arr
     end
@@ -9,6 +17,7 @@ end
 
 #writes everything except measurements to a file
 function write_all(path::String, mc::Simulation)
+    ensure_parent_dir(path)
     h5open(path, "w") do file
         for key in fieldnames(SpinSystem)
             value = getfield(mc.spin_system, key)
@@ -29,6 +38,7 @@ end
 
 #writes measurements to a file
 function write_observables(path::String, mc::Simulation, spin_config::Matrix{Float64}=zeros(0,0))
+    ensure_parent_dir(path)
     obs = mc.observables
     
     heat, dheat = specific_heat(mc)
@@ -62,6 +72,7 @@ function write_observables(path::String, mc::Simulation, spin_config::Matrix{Flo
 end
 
 function write_parameters(path::String, system::SpinSystem, params::MCParams, Ts::Vector{Float64}, h_direction::Vector{Float64}, h_sweep::Vector{Float64}, seed::Int64)
+    ensure_parent_dir(path)
     h5open(path, "w") do file
         param_gr = create_group(file, "parameters")
         param_gr["N_therm"] = params.N_therm
@@ -86,6 +97,8 @@ end
 function collect_hsweep(results_dir::String, file_prefix::String, save_dir::String, parameters_path::String)
     raw_files = readdir(results_dir, join=false, sort=false)
     
+    mkpath(save_dir)
+
     h5open(joinpath(save_dir, file_prefix*"sweep.h5"), "w") do file
         param_gr = create_group(file, "parameters")
 
@@ -164,6 +177,7 @@ end
 
 #saves configurations at various temperatures generated from a single simulated annealing run
 function write_collection_sim_anneal(path::String, configurations_save::Vector{Matrix{Float64}}, params::MCParams, system::SpinSystem, temp_save::Vector{Float64}, h_direction::Vector{Float64}, h_sweep::Vector{Float64}, seed::Int64)
+    ensure_parent_dir(path)
     h5open(path, "w") do file
         param_gr = create_group(file, "parameters")
         param_gr["N_therm"] = params.N_therm
@@ -200,6 +214,10 @@ function collect_theta_sweep(results_dir::String, file_prefix::String, save_dir:
     raw_files = readdir(results_dir, join=false, sort=false)
     theta_values = range(theta_min, theta_max, length=N_theta)
     
+    if !isdir(save_dir)
+        mkpath(save_dir)
+    end
+
     h5open(joinpath(save_dir, file_prefix*"_$(theta_min)to$(theta_max).h5"), "w") do file
         file["theta_values"] = Vector(theta_values)
         

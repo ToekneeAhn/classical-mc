@@ -127,20 +127,26 @@ function generate_parallel_temper_collection_script(params_file_runtime, account
     #SBATCH --mem-per-cpu=4000M
     #SBATCH --time=1:00:00
     #SBATCH --job-name=collect_pt
-    #SBATCH --output=/scratch/antony/slurm_out/%j_collect.out
+    #SBATCH --output=/scratch/antony/slurm_out/%j.out
     #SBATCH --mail-user=t.an@mail.utoronto.ca
     #SBATCH --mail-type=ALL
 
     module load StdEnv/2023 julia/1.11.3
     export PMIX_MCA_psec=native
 
+    RESULTS_DIR="$results_dir"
+    FILE_PREFIX="$file_prefix"
+
     # run collection script
     cd /home/antony/classical-mc
-    julia --project=/home/antony/classical-mc -e "using PyroClassicalMC; collect_hsweep(\\\"$results_dir\\\", \\\"$file_prefix\\\", \\\"$save_dir\\\", \\\"$parameters_path\\\")"
-
-    # clean up
-    cd $results_dir
-    rm $file_prefix*
+    if julia --project=/home/antony/classical-mc -e "using PyroClassicalMC; collect_hsweep(\\\"$results_dir\\\", \\\"$file_prefix\\\", \\\"$save_dir\\\", \\\"$parameters_path\\\")"; then
+        # clean up only when collection succeeds
+        cd "\$RESULTS_DIR"
+        rm -- "\${FILE_PREFIX}"*
+    else
+        echo "Collection failed; skipping cleanup." >&2
+        exit 1
+    fi
     """
 end
 
@@ -167,23 +173,30 @@ function generate_theta_collection_script(params_file_runtime, account)
     #SBATCH --mem-per-cpu=4000M
     #SBATCH --time=00:15:00
     #SBATCH --job-name=collect_theta
-    #SBATCH --output=/scratch/antony/slurm_out/%j_collect.out
+    #SBATCH --output=/scratch/antony/slurm_out/%j.out
     #SBATCH --mail-user=t.an@mail.utoronto.ca
     #SBATCH --mail-type=ALL
 
     module load StdEnv/2023 julia/1.11.3
     export PMIX_MCA_psec=native
 
+    RESULTS_DIR="$results_dir"
+    SAVE_DIR="$save_dir"
+    FILE_PREFIX="$file_prefix"
+
     # run collection script
     cd /home/antony/classical-mc
-    julia --project=/home/antony/classical-mc -e "using PyroClassicalMC; collect_theta_sweep(\\\"$save_dir\\\", \\\"$file_prefix\\\", \\\"$collect_dir\\\", $theta_min, $theta_max, $N_theta)"
+    if julia --project=/home/antony/classical-mc -e "using PyroClassicalMC; collect_theta_sweep(\\\"$save_dir\\\", \\\"$file_prefix\\\", \\\"$collect_dir\\\", $theta_min, $theta_max, $N_theta)"; then
+        # clean up only when collection succeeds
+        cd "\$RESULTS_DIR"
+        rm -- "\${FILE_PREFIX}"*
 
-    # clean up
-    cd $results_dir
-    rm $file_prefix*
-
-    cd $save_dir
-    rm $file_prefix*
+        cd "\$SAVE_DIR"
+        rm -- "\${FILE_PREFIX}"*
+    else
+        echo "Collection failed; skipping cleanup." >&2
+        exit 1
+    fi
     """
 end
 
@@ -253,10 +266,15 @@ job_type = ARGS[1]
 account = length(ARGS) > 1 ? ARGS[2] : "def-ybkim" #rrg-ybkim on fir, def-ybkim by default
 
 # Common setup
-project_root = normpath(joinpath(@__DIR__, ".."))
+project_root = dirname(@__DIR__)
 dir_name = basename(project_root)
-submit_dir = "/scratch/antony/$(dir_name)"
+submit_dir = "/scratch/antony/$(dir_name)_submit"
 params_dest_dir = "/scratch/antony/param_files"
+
+println("Submitting job of type: $job_type from $submit_dir on account: $account")
+
+mkpath(submit_dir)
+mkpath(params_dest_dir)
 date_time = now()
 
 # Determine params file and script based on job type
@@ -276,32 +294,29 @@ params = YAML.load_file(params_file_runtime)
 N_h = params["N_h"]
 
 # Generate job-specific SLURM script
+submit_collection = true
 if job_type == "sim_anneal" || job_type == "sa" || job_type == "simulated_annealing"
     slurm_script = generate_sim_anneal_script(julia_script, params_file_runtime, account)
     slurm_filename = "$(submit_dir)/submit_simulated_annealing.sh"
-    
+    submit_collection = false
 elseif job_type == "parallel_temper" || job_type == "pt" || job_type == "parallel_tempering"
     slurm_script = generate_parallel_temper_script_single_node(julia_script, params_file_runtime, account)
     slurm_filename = "$(submit_dir)/submit_parallel_tempering.sh"
 
     collection_script = generate_parallel_temper_collection_script(params_file_runtime, account)
     collection_filename = "$(submit_dir)/submit_pt_collect.sh"
-
 elseif job_type == "parallel_temper_job_array" || job_type == "pt_array"
     slurm_script = generate_parallel_temper_script(julia_script, params_file_runtime, account, params["parallel_temper"]["job"]["h_points_per_node"])
     slurm_filename = "$(submit_dir)/submit_parallel_tempering.sh"
 
     collection_script = generate_parallel_temper_collection_script(params_file_runtime, account)
     collection_filename = "$(submit_dir)/submit_pt_collect.sh"
-    
 elseif job_type == "theta_sweep" || job_type == "theta"
     slurm_script = generate_theta_sweep_script(julia_script, params_file_runtime, account)
     slurm_filename = "$(submit_dir)/submit_theta.sh"
     
-    # Also generate collection script
     collection_script = generate_theta_collection_script(params_file_runtime, account)
     collection_filename = "$(submit_dir)/submit_theta_collect.sh"
-    
 else
     error("Unknown job type: $job_type")
 end
@@ -319,8 +334,8 @@ try
     output = read(`sbatch $(slurm_filename)`, String)
     println(output)
     
-    # For theta_sweep, also submit dependent collection job
-    if job_type == "theta_sweep" || job_type == "parallel_temper" || job_type == "parallel_temper_job_array"
+    # submit dependent collection job
+    if submit_collection
         # Extract job ID from output (format: "Submitted batch job 12345")
         job_id = match(r"(\d+)", output).match
         
