@@ -8,13 +8,19 @@ export Observables
 export spin_expec, magnetization_global, std_error_safe
 export specific_heat, susceptibility, binder_cumulant, dSdT
 
-include("metropolis_pyrochlore.jl")
+include("types.jl")
 export SIPC, SpinSystem, MCParams, Simulation
+
+include("lattice.jl")
 export local_to_global, pos_mod, get_sublattice, flat_index_3D, sipc_index_3D
 export neighbours_pyro, neighbours_all
 export cubic_sites_pyro, cubic_sites_all, cubic_pairs_split_all
+
+include("interactions.jl")
 export unique_cubic_triplets, cubic_tensors_sparse_all, cubic_tensors_all
 export H_bilinear_all, zeeman_field_random
+
+include("metropolis_pyrochlore.jl")
 export local_field_pyro, E_pyro, energy_difference_pyro
 export spins_initial_pyro, sphere_pick, set_spin!, get_spin
 export metropolis!, overrelax_pyro!, det_update!

@@ -276,25 +276,25 @@ params = YAML.load_file(params_file_runtime)
 N_h = params["N_h"]
 
 # Generate job-specific SLURM script
-if job_type == "sim_anneal"
+if job_type == "sim_anneal" || job_type == "sa" || job_type == "simulated_annealing"
     slurm_script = generate_sim_anneal_script(julia_script, params_file_runtime, account)
     slurm_filename = "$(submit_dir)/submit_simulated_annealing.sh"
     
-elseif job_type == "parallel_temper"
+elseif job_type == "parallel_temper" || job_type == "pt" || job_type == "parallel_tempering"
     slurm_script = generate_parallel_temper_script_single_node(julia_script, params_file_runtime, account)
     slurm_filename = "$(submit_dir)/submit_parallel_tempering.sh"
 
     collection_script = generate_parallel_temper_collection_script(params_file_runtime, account)
     collection_filename = "$(submit_dir)/submit_pt_collect.sh"
 
-elseif job_type == "parallel_temper_job_array"
+elseif job_type == "parallel_temper_job_array" || job_type == "pt_array"
     slurm_script = generate_parallel_temper_script(julia_script, params_file_runtime, account, params["parallel_temper"]["job"]["h_points_per_node"])
     slurm_filename = "$(submit_dir)/submit_parallel_tempering.sh"
 
     collection_script = generate_parallel_temper_collection_script(params_file_runtime, account)
     collection_filename = "$(submit_dir)/submit_pt_collect.sh"
     
-elseif job_type == "theta_sweep"
+elseif job_type == "theta_sweep" || job_type == "theta"
     slurm_script = generate_theta_sweep_script(julia_script, params_file_runtime, account)
     slurm_filename = "$(submit_dir)/submit_theta.sh"
     
