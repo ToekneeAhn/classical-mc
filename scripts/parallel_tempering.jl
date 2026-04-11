@@ -1,6 +1,7 @@
 using MPI, LinearAlgebra, Printf, YAML, ArgParse
 using BinningAnalysis: unbinned_tau
 using PyroClassicalMC
+include(joinpath(@__DIR__, "config_utils.jl"))
 
 s = ArgParseSettings()
 @add_arg_table s begin
@@ -15,41 +16,33 @@ s = ArgParseSettings()
 end
 
 parsed_args = parse_args(s)
-params = YAML.load_file(parsed_args["params_file"])
 h_index = parsed_args["h_index"]
+cfg = load_config(parsed_args["params_file"], :parallel_temper)
 
-N = params["N_uc"]
-S = params["S"]
-Js = params["Js"]
-include_cubic = params["include_cubic"]
-K = params["K"][1] + im * params["K"][2] 
-h_theta = params["h_theta"]
-h_sweep_args = params["h_sweep_args"]
-N_h = params["N_h"]
-delta_12 = params["delta_12"]
-disorder_strength = params["disorder_strength"]
-disorder_seed = params["disorder_seed"]
-
-params_pt = params["parallel_temper"]
-N_therm = params_pt["mc_params"]["N_therm"]
-overrelax_rate = params_pt["mc_params"]["overrelax_rate"]
-N_meas = params_pt["mc_params"]["N_meas"]
-probe_rate = params_pt["mc_params"]["probe_rate"]
-replica_exchange_rate = params_pt["mc_params"]["replica_exchange_rate"]
-optimize_temperature_rate = params_pt["mc_params"]["optimize_temperature_rate"]
-T_args = params_pt["T_args"]
-load_configs = params_pt["load_configs"]
-load_configs_prefix = params_pt["load_configs_prefix"]
-results_dir = params_pt["results_dir"]
-save_dir = params_pt["save_dir"]
-file_prefix = params_pt["file_prefix"]
-save_configs = params_pt["save_configs"]
-hhl_tilt = params["hhl_tilt"]
-
-#h_direction = [1.0,1.0,1.0]/sqrt(3) .* cos(h_theta * pi/180) .+ [1.0,1.0,-2.0]/sqrt(6) .* sin(h_theta * pi/180)
-n_1 = [1.0, 1.0, 1.0] / sqrt(3)
-n_2 = 1/sqrt(6) * [cos(hhl_tilt * pi/180) - sqrt(3)*sin(hhl_tilt * pi/180), cos(hhl_tilt * pi/180) + sqrt(3)*sin(hhl_tilt * pi/180), -2 * cos(hhl_tilt * pi/180)]
-h_direction = n_1 * cos(h_theta * pi/180) .+ n_2 * sin(h_theta * pi/180)
+N = cfg.N
+S = cfg.S
+Js = cfg.Js
+include_cubic = cfg.include_cubic
+K = cfg.K
+h_sweep_args = cfg.h_sweep_args
+N_h = cfg.N_h
+delta_12 = cfg.delta_12
+disorder_strength = cfg.disorder_strength
+disorder_seed = cfg.disorder_seed
+N_therm = cfg.N_therm
+overrelax_rate = cfg.overrelax_rate
+N_meas = cfg.N_meas
+probe_rate = cfg.probe_rate
+replica_exchange_rate = cfg.replica_exchange_rate
+optimize_temperature_rate = cfg.optimize_temperature_rate
+T_args = cfg.T_args
+load_configs = cfg.load_configs
+load_configs_prefix = cfg.load_configs_prefix
+results_dir = cfg.results_dir
+save_dir = cfg.save_dir
+file_prefix = cfg.file_prefix
+save_configs = cfg.save_configs
+h_direction = cfg.h_direction
 
 h_min, h_max = h_sweep_args
 h_sweep = range(h_min, h_max, N_h)
@@ -64,11 +57,14 @@ comm_size = MPI.Comm_size(comm)
 r = MPI.Comm_rank(comm)
 
 #do a broadcast to ensure all replicas have the same disorder configuration
-if disorder_seed[1] == 0
-    disorder_seed = [rand(1:10^9)]
-    MPI.Bcast!(disorder_seed, root=0, comm)
+disorder_seed_buffer = normalize_disorder_seed(disorder_seed)
+if disorder_seed_buffer[1] == 0
+    if r == 0
+        disorder_seed_buffer[1] = rand(1:10^9)
+    end
+    MPI.Bcast!(disorder_seed_buffer, root=0, comm)
 end
-disorder_seed = disorder_seed[1]
+disorder_seed = disorder_seed_buffer[1]
 
 #initial spin configuration 
 if load_configs == true

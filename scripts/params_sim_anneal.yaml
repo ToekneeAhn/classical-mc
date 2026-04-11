@@ -1,53 +1,48 @@
 #system parameters
-N_uc: 6 #number of unit cells
+N_uc: 4 #number of unit cells along each direction
 S: 0.5 #spin length
 Js: #exchange coupling constants
-  - 2.0
-  - -0.5
-  - 0.01
+  - 1.0
+  - -0.3
+  - 0.0
   - 0.0
 include_cubic: false #whether to include cubic spin interaction S^z S^+ S^z
 K: #cubic interaction strength (real and imaginary parts)
-  - 0.0
+  - 0.03
   - 0.0
 #external magnetic field parameters
-plane_n1: [1.0, 0.0, 0.0] #first plane vector for theta sweep
-plane_n2: [0.0, 1.0, 0.0] #second plane vector for theta sweep
-#theta is defined so that theta=0 points along n1 and theta=90 points along n2
-theta_args: #angles for theta sweep (in degrees)
-  - 0.0
-  - 179.0
-N_theta: 180
+h_theta: -54.73561 #magnetic field angle between [111] and [11-2] directions (degrees)
 h_sweep_args:
-  - 0.1
-  - 16.75
-N_h: 64
+  - 0.5
+  - 3.0
+N_h: 32
+hhl_tilt: 0.0 #tilt angle of hhl plane about [111] axis (degrees)
 delta_12: #quadratic zeeman coupling constants
-  - 0.002
-  - 0.002
+  - 0.0
+  - 0.0
 #disorder (random transverse field) parameters
 disorder_strength: 0.0
 disorder_seed: 123456
 #monte carlo simulation parameters
 sim_anneal:
   job:
-    time: "6:00:00"
+    time: "1:00:00"
     mem_per_cpu: "1000M"
-    job_name: "piflux_delta++_xy"
-  file_prefix: "piflux_delta=++0.002_xy"
+    job_name: "test"
+  file_prefix: "testsimanneal"
   results_dir: "/scratch/antony/sim_anneal_out" #temporary storage
-  save_dir: "/scratch/antony/theta_sweep" #final storage
+  save_dir: "/scratch/antony/testing" #final storage
   mc_params:
-    N_therm: 1000000
+    N_therm: 100000
     overrelax_rate: 10
     N_det: 0
   T_args: #temperature schedule
     - 0.002
-    - 2.0
+    - 3.0
   #save configurations at low T for use as initial conditions
   save_configs: false
   T_save_args:
     - 0.001
     - 0.25
   N_save: 48
-  save_configs_prefix: "../pt_collect/save_config/Jpm=0_Jpmpm+_h"
+  save_configs_prefix: "/scratch/antony/pt_collect/save_config/Jpm=0_Jpmpm+_h"

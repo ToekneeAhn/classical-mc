@@ -1,5 +1,6 @@
 using MPI, LinearAlgebra, YAML, ArgParse
 using PyroClassicalMC
+include(joinpath(@__DIR__, "config_utils.jl"))
 
 s = ArgParseSettings()
 @add_arg_table s begin
@@ -7,48 +8,30 @@ s = ArgParseSettings()
         help = "Path to the YAML parameter file"
         arg_type = String
         required = true
-    "--theta_index"
-        help = "Index of the theta value to use"
-        arg_type = Int
-        required = false
 end
 
 parsed_args = parse_args(s)
-params = YAML.load_file(parsed_args["params_file"]) 
-if parsed_args["theta_index"] !== nothing #theta sweep job
-    theta_index = parsed_args["theta_index"] + 1
-    theta_sweep = range(params["theta_min"], params["theta_max"], params["N_theta"])
-    h_theta = theta_sweep[theta_index]
-else #normal simulated annealing job
-    h_theta = params["h_theta"]
-end
+cfg = load_config(parsed_args["params_file"], :sim_anneal)
 
-N = params["N_uc"]
-S = params["S"]
-Js = params["Js"]
-include_cubic = params["include_cubic"]
-K = params["K"][1] + im * params["K"][2] 
-h_sweep_args = params["h_sweep_args"]
-N_h = params["N_h"]
-delta_12 = params["delta_12"]
-disorder_strength = params["disorder_strength"]
-disorder_seed = params["disorder_seed"]
-
-params_sa = params["sim_anneal"]
-N_therm = params_sa["mc_params"]["N_therm"]
-overrelax_rate = params_sa["mc_params"]["overrelax_rate"]
-N_det = params_sa["mc_params"]["N_det"]
-T_args = params_sa["T_args"]
-save_configs = params_sa["save_configs"]
-results_dir = params_sa["results_dir"]
-save_dir = params_sa["save_dir"]
-file_prefix = params["sim_anneal"]["file_prefix"] 
-hhl_tilt = params["hhl_tilt"]
-
-#h_direction = [1.0,1.0,1.0]/sqrt(3) .* cos(h_theta * pi/180) .+ [1.0,1.0,-2.0]/sqrt(6) .* sin(h_theta * pi/180)
-n_1 = [1.0, 1.0, 1.0] / sqrt(3)
-n_2 = 1/sqrt(6) * [cos(hhl_tilt * pi/180) - sqrt(3)*sin(hhl_tilt * pi/180), cos(hhl_tilt * pi/180) + sqrt(3)*sin(hhl_tilt * pi/180), -2 * cos(hhl_tilt * pi/180)]
-h_direction = n_1 * cos(h_theta * pi/180) .+ n_2 * sin(h_theta * pi/180)
+N = cfg.N
+S = cfg.S
+Js = cfg.Js
+include_cubic = cfg.include_cubic
+K = cfg.K
+h_sweep_args = cfg.h_sweep_args
+N_h = cfg.N_h
+delta_12 = cfg.delta_12
+disorder_strength = cfg.disorder_strength
+disorder_seed = cfg.disorder_seed
+N_therm = cfg.N_therm
+overrelax_rate = cfg.overrelax_rate
+N_det = cfg.N_det
+T_args = cfg.T_args
+save_configs = cfg.save_configs
+results_dir = cfg.results_dir
+save_dir = cfg.save_dir
+file_prefix = cfg.file_prefix
+h_direction = cfg.h_direction
 
 h_min, h_max = h_sweep_args
 h_sweep = range(h_min, h_max, N_h)
@@ -57,11 +40,11 @@ h_sweep = range(h_min, h_max, N_h)
 T_f, T_i = T_args
 
 if save_configs
-    T_save_args = params_sa["T_save_args"]
+    T_save_args = cfg.T_save_args
     T_save_min, T_save_max = T_save_args
-    N_save = params_sa["N_save"]
+    N_save = cfg.N_save
     temp_save = exp10.(range(log10(T_save_min), stop=log10(T_save_max), length=N_save)) 
-    save_configs_prefix = params_sa["save_configs_prefix"]
+    save_configs_prefix = cfg.save_configs_prefix
 else
     temp_save = []
 end
@@ -77,11 +60,14 @@ h_sweep = range(h_min, h_max, N_h)
 h = h_sweep[h_index]*h_direction
 
 #do a broadcast to ensure all replicas have the same disorder configuration
-if disorder_seed[1] == 0
-    disorder_seed = [rand(1:10^9)]
-    MPI.Bcast!(disorder_seed, root=0, comm)
+disorder_seed_buffer = normalize_disorder_seed(disorder_seed)
+if disorder_seed_buffer[1] == 0
+    if r == 0
+        disorder_seed_buffer[1] = rand(1:10^9)
+    end
+    MPI.Bcast!(disorder_seed_buffer, root=0, comm)
 end
-disorder_seed = disorder_seed[1]
+disorder_seed = disorder_seed_buffer[1]
 
 N_sites = 4*N^3
 #random initial configuration
@@ -133,13 +119,8 @@ else
 end
 
 #writes measurements to a file
-if parsed_args["theta_index"] !== nothing
-    file_append = "_theta=$(h_theta)_h$(h_index)_0.h5" #trailing _0 for compatibility with pt naming and collect_hsweep()
-    parameters_path = joinpath(results_dir, file_prefix*"_theta=$(h_theta)_parameters.h5")
-else
-    file_append = "_h$(h_index)_0.h5" 
-    parameters_path = joinpath(results_dir, file_prefix*"_parameters.h5")
-end
+file_append = "_h$(h_index)_0.h5"
+parameters_path = joinpath(results_dir, file_prefix*"_parameters.h5")
 
 write_observables(joinpath(results_dir, file_prefix*file_append), simulation)
 MPI.Barrier(comm) #barrier in case 
@@ -147,11 +128,6 @@ MPI.Barrier(comm) #barrier in case
 #collect results about T_f when sweep finished
 if r == 0
     write_parameters(parameters_path, system, mc_params, [T_f], h_direction, Vector(h_sweep), disorder_seed)
-    if parsed_args["theta_index"] !== nothing
-        collect_hsweep(results_dir, file_prefix*"_theta=$(h_theta)_h", save_dir, parameters_path)
-        #runs in job-dependent script after: collect_theta_sweep(save_dir, file_prefix, save_dir, params["theta_min"], params["theta_max"], params["N_theta"]) 
-    else
-        collect_hsweep(results_dir, file_prefix*"_h", save_dir, parameters_path)
-    end
+    collect_hsweep(results_dir, file_prefix*"_h", save_dir, parameters_path)
 end
 

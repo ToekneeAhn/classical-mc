@@ -152,8 +152,9 @@ end
 
 function generate_theta_collection_script(params_file_runtime, account)
     params = YAML.load_file(params_file_runtime)
-    theta_min = params["theta_min"]
-    theta_max = params["theta_max"]
+    theta_args = haskey(params, "theta_args") ? params["theta_args"] : [params["theta_min"], params["theta_max"]]
+    theta_min = theta_args[1]
+    theta_max = theta_args[2]
     N_theta = params["N_theta"]
 
     results_dir = params["sim_anneal"]["results_dir"]
@@ -203,8 +204,6 @@ end
 function generate_theta_sweep_script(julia_script, params_file_runtime, account)
     params = YAML.load_file(params_file_runtime)
     N_h = params["N_h"]
-    theta_min = params["theta_min"]
-    theta_max = params["theta_max"]
     N_theta = params["N_theta"]
     
     cpus_per_node = 192  # Check with: sinfo --Node --long
@@ -269,7 +268,7 @@ account = length(ARGS) > 1 ? ARGS[2] : "def-ybkim" #rrg-ybkim on fir, def-ybkim 
 project_root = dirname(@__DIR__)
 dir_name = basename(project_root)
 submit_dir = "/scratch/antony/$(dir_name)_submit"
-params_dest_dir = "/scratch/antony/param_files"
+params_dest_dir = "/scratch/antony/$(dir_name)_param_files"
 
 println("Submitting job of type: $job_type from $submit_dir on account: $account")
 
@@ -278,15 +277,22 @@ mkpath(params_dest_dir)
 date_time = now()
 
 # Determine params file and script based on job type
-if job_type == "theta_sweep"
+is_theta_job = job_type == "theta_sweep" || job_type == "theta"
+is_pt_job = job_type == "parallel_temper" || job_type == "pt" || job_type == "parallel_tempering" ||
+            job_type == "parallel_temper_job_array" || job_type == "pt_array"
+
+if is_theta_job
     params_file = joinpath(@__DIR__, "params_theta_sweep.yaml")
     params_file_runtime = "$(params_dest_dir)/params_theta_sweep_$(Dates.format(date_time, "yyyymmdd_HHMMSS")).yaml"
-    julia_script = joinpath(project_root, "scripts", "simulated_annealing.jl")
+    julia_script = joinpath(project_root, "scripts", "simulated_annealing_theta_sweep.jl")
+elseif is_pt_job
+    params_file = joinpath(@__DIR__, "params_parallel_temper.yaml")
+    params_file_runtime = "$(params_dest_dir)/params_parallel_temper_$(Dates.format(date_time, "yyyymmdd_HHMMSS")).yaml"
+    julia_script = joinpath(project_root, "scripts", "parallel_tempering.jl")
 else
-    params_file = joinpath(@__DIR__, "params.yaml")
-    params_file_runtime = "$(params_dest_dir)/params_$(Dates.format(date_time, "yyyymmdd_HHMMSS")).yaml"
-    julia_script = job_type == "sim_anneal" ? joinpath(project_root, "scripts", "simulated_annealing.jl") :
-                   joinpath(project_root, "scripts", "parallel_tempering.jl")
+    params_file = joinpath(@__DIR__, "params_sim_anneal.yaml")
+    params_file_runtime = "$(params_dest_dir)/params_sim_anneal_$(Dates.format(date_time, "yyyymmdd_HHMMSS")).yaml"
+    julia_script = joinpath(project_root, "scripts", "simulated_annealing.jl")
 end
 
 cp(params_file, params_file_runtime)
