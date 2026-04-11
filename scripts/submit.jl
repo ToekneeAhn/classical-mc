@@ -103,7 +103,7 @@ function generate_parallel_temper_script(julia_script, params_file_runtime, acco
         H_IDX=\$((START_H_IDX + i + 1))
         
         if [ \$H_IDX -le \$N_H ]; then
-            srun --output=/scratch/antony/slurm_out/%A_h\${H_IDX}.out julia --project=/home/antony/classical-mc $julia_script --params_file $params_file_runtime --h_index \$H_IDX 
+            srun --output=/scratch/antony/slurm_out/%A_\${H_IDX}.out julia --project=/home/antony/classical-mc $julia_script --params_file $params_file_runtime --h_index \$H_IDX 
         fi
     done
 
@@ -172,7 +172,7 @@ function generate_theta_collection_script(params_file_runtime, account)
     #SBATCH --ntasks=1
     #SBATCH --cpus-per-task=1
     #SBATCH --mem-per-cpu=4000M
-    #SBATCH --time=00:15:00
+    #SBATCH --time=1:00:00
     #SBATCH --job-name=collect_theta
     #SBATCH --output=/scratch/antony/slurm_out/%j.out
     #SBATCH --mail-user=t.an@mail.utoronto.ca
@@ -243,7 +243,7 @@ function generate_theta_sweep_script(julia_script, params_file_runtime, account)
         if [ \$THETA_IDX -lt \$N_THETA ]; then
             # Launch each theta job with its own CPUs and output file, backgrounded
             srun --ntasks=\$CPUS_PER_THETA --exclusive --mem-per-cpu=$(params["sim_anneal"]["job"]["mem_per_cpu"]) \
-                --output=/scratch/antony/slurm_out/%A_theta\${THETA_IDX}.out \
+                --output=/scratch/antony/slurm_out/%A_\${THETA_IDX}.out \
                 julia --project=/home/antony/classical-mc $julia_script \
                 --params_file $params_file_runtime --theta_index \$THETA_IDX &
         fi

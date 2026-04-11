@@ -212,56 +212,74 @@ end
 
 function collect_theta_sweep(results_dir::String, file_prefix::String, save_dir::String, theta_min::Float64, theta_max::Float64, N_theta::Int64)
     raw_files = readdir(results_dir, join=false, sort=false)
-    theta_values = range(theta_min, theta_max, length=N_theta)
+    theta_values = collect(range(theta_min, theta_max, length=N_theta))
     
-    if !isdir(save_dir)
-        mkpath(save_dir)
-    end
+    mkpath(save_dir)
 
     h5open(joinpath(save_dir, file_prefix*"_$(theta_min)to$(theta_max).h5"), "w") do file
         file["theta_values"] = Vector(theta_values)
         
         last_fid = nothing
-        missing_thetas = Float64[]
+        parameters_source_fid = nothing
+        missing_theta_indices = Int64[]
         
-        for theta in theta_values
-            fname = file_prefix*"_theta=$(theta)_hsweep.h5"
-            
+        for theta_index in 0:(N_theta-1)
+            theta = theta_values[theta_index+1]
+            fname = file_prefix*"_theta$(theta_index)_hsweep.h5"
+
             if fname in raw_files
                 h5open(joinpath(results_dir, fname), "r") do fid
-                    gr = create_group(file, "$(theta)")
+                    gr = create_group(file, "$(theta_index)")
                     # Copy each object (group or dataset) preserving structure
                     for key in keys(fid)
-                        HDF5.copy_object(fid[key], gr, key)
+                        if key != "parameters" # Skip parameters group to avoid redundancy
+                            HDF5.copy_object(fid[key], gr, key)
+                        end
                     end
                 end
                 
                 # Update last available file for fallback
                 last_fid = joinpath(results_dir, fname)
+                if parameters_source_fid === nothing
+                    parameters_source_fid = last_fid
+                end
             else
                 if last_fid !== nothing
-                    println("File for theta=$(theta) not found! Using last available data point.")
-                    push!(missing_thetas, theta)
+                    println("File for theta_index=$(theta_index) (theta=$(theta)) not found! Using last available data point.")
+                    push!(missing_theta_indices, theta_index)
                     
                     # Copy data from last available file
                     h5open(last_fid, "r") do fid
-                        gr = create_group(file, "$(theta)")
+                        gr = create_group(file, "$(theta_index)")
                         for key in keys(fid)
-                            HDF5.copy_object(fid[key], gr, key)
+                            if key != "parameters"
+                                HDF5.copy_object(fid[key], gr, key)
+                            end
                         end
                     end
                 else
-                    println("ERROR: File for theta=$(theta) not found and no previous data available!")
-                    push!(missing_thetas, theta)
+                    println("ERROR: File for theta_index=$(theta_index) (theta=$(theta)) not found and no previous data available!")
+                    push!(missing_theta_indices, theta_index)
                 end
             end 
         end
-        
-        if !isempty(missing_thetas)
-            println("Warning: Missing/copied data for theta values: ", missing_thetas)
+
+        if parameters_source_fid === nothing
+            error("No theta sweep files found in $(results_dir) for prefix $(file_prefix)")
         end
 
-        file["missing_theta_points"] = missing_thetas
+        if !isempty(missing_theta_indices)
+            println("Warning: Missing/copied data for theta indices: ", missing_theta_indices)
+        end
+
+        file["missing_theta_points"] = missing_theta_indices
+        h5open(parameters_source_fid, "r") do fid
+            param_gr = create_group(file, "parameters")
+            for key in keys(fid["parameters"])
+                param_gr[key] = read(fid["parameters"][key])
+            end
+            file["h_values"] = read(fid["parameters"]["h_sweep"])
+        end
         
         println("Saved $N_theta theta points to ", joinpath(save_dir, file_prefix*"_$(theta_min)to$(theta_max).h5"))
     end

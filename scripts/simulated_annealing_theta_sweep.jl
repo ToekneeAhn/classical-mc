@@ -15,7 +15,8 @@ s = ArgParseSettings()
 end
 
 parsed_args = parse_args(s)
-cfg = load_config(parsed_args["params_file"], :sim_anneal; theta_index=parsed_args["theta_index"])
+theta_index = parsed_args["theta_index"]
+cfg = load_config(parsed_args["params_file"], :sim_anneal; theta_index=theta_index)
 
 N = cfg.N
 S = cfg.S
@@ -122,8 +123,8 @@ else
 end
 
 #writes measurements to a file
-file_append = "_theta=$(h_theta)_h$(h_index)_0.h5" #trailing _0 for compatibility with pt naming and collect_hsweep()
-parameters_path = joinpath(results_dir, file_prefix*"_theta=$(h_theta)_parameters.h5")
+file_append = "_theta$(theta_index)_h$(h_index)_0.h5" #trailing _0 for compatibility with pt naming and collect_hsweep()
+parameters_path = joinpath(results_dir, file_prefix*"_theta$(theta_index)_parameters.h5")
 
 write_observables(joinpath(results_dir, file_prefix*file_append), simulation)
 MPI.Barrier(comm)
@@ -131,5 +132,5 @@ MPI.Barrier(comm)
 #collect results about T_f when h sweep finished
 if r == 0
     write_parameters(parameters_path, system, mc_params, [T_f], h_direction, Vector(h_sweep), disorder_seed)
-    collect_hsweep(results_dir, file_prefix*"_theta=$(h_theta)_h", save_dir, parameters_path)
+    collect_hsweep(results_dir, file_prefix*"_theta$(theta_index)_h", save_dir, parameters_path)
 end
