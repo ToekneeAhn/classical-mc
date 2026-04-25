@@ -102,6 +102,7 @@ end
 
 mc_params = MCParams(N_therm, N_det, overrelax_rate, -1, -1, -1, -1)
 simulation = Simulation(system, T_f, mc_params, Observables(), 0, "none")
+config = RunConfig([T_f], h_direction, Vector(h_sweep), disorder_seed)
 
 if r == 0
     #makes save directories if they doesn't exist
@@ -113,14 +114,7 @@ if r == 0
     end
 end
 
-#simulated annealing with annealing schedule T = T_i*0.9^t
-if save_configs
-    #saves at specified temperatures during annealing
-    _, configurations_save = sim_anneal!(simulation, t-> T_i * 0.9^t, temp_save, false)
-    write_collection_sim_anneal(joinpath(save_dir, save_configs_prefix)*"$(h_index).h5", configurations_save, mc_params, system, temp_save, h_direction, [norm(h)], disorder_seed)
-else
-    sim_anneal!(simulation, t-> T_i * 0.9^t, Float64[], r == 0 ? true : false)
-end
+sim_anneal!(simulation, t-> T_i * 0.9^t, Float64[], r == 0 ? true : false)
 
 #writes measurements to a file
 file_append = "_theta$(theta_index)_h$(h_index)_0.h5" #trailing _0 for compatibility with pt naming and collect_hsweep()
@@ -131,6 +125,6 @@ MPI.Barrier(comm)
 
 #collect results about T_f when h sweep finished
 if r == 0
-    write_parameters(parameters_path, system, mc_params, [T_f], h_direction, Vector(h_sweep), disorder_seed)
+    write_parameters(parameters_path, system, mc_params, config)
     collect_hsweep(results_dir, file_prefix*"_theta$(theta_index)_h", save_dir, parameters_path)
 end

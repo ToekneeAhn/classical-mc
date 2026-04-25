@@ -145,6 +145,7 @@ MPI.Barrier(comm) #barrier in case
 #write one parameters file since h_direction remains constant throughout h sweep
 if h_index == 1
     if r == 0
-        write_parameters(joinpath(results_dir, file_prefix*"_parameters.h5"), system, mc_params, Ts, h_direction, Vector(h_sweep), disorder_seed)
+        config = RunConfig(Ts, h_direction, Vector(h_sweep), disorder_seed)
+        write_parameters(joinpath(results_dir, file_prefix*"_parameters.h5"), system, mc_params, config)
     end
 end

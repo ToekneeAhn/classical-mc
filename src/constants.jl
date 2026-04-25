@@ -22,3 +22,8 @@ LOCAL_2 = [-2/sqrt(6) -1/sqrt(6) -1/sqrt(6); 0 1/sqrt(2) -1/sqrt(2); 1/sqrt(3) -
 LOCAL_3 = [2/sqrt(6) 1/sqrt(6) -1/sqrt(6); 0 -1/sqrt(2) -1/sqrt(2); -1/sqrt(3) 1/sqrt(3) -1/sqrt(3)]'
 LOCAL_4 = [2/sqrt(6) -1/sqrt(6) 1/sqrt(6); 0 1/sqrt(2) 1/sqrt(2); -1/sqrt(3) -1/sqrt(3) 1/sqrt(3)]'
 LOCAL_BASES = [Matrix{Float64}(LOCAL_1), Matrix{Float64}(LOCAL_2), Matrix{Float64}(LOCAL_3), Matrix{Float64}(LOCAL_4)]
+
+# I/O 
+PARAMETER_FIELDS = ["N_therm", "N_meas", "overrelax_rate", "probe_rate", "replica_exchange_rate",
+                    "N", "S", "Js", "K", "delta_12", "Ts", 
+                    "h_direction", "h_sweep", "disorder_strength", "disorder_seed"]

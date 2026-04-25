@@ -52,25 +52,28 @@ function write_observables(path::String, mc::Simulation, spin_config::Matrix{Flo
     end
 end
 
-function write_parameters(path::String, system::SpinSystem, params::MCParams, Ts::Vector{Float64}, h_direction::Vector{Float64}, h_sweep::Vector{Float64}, seed::Int64)
+function write_parameters(path::String, system::SpinSystem, params::MCParams, config::RunConfig)
     ensure_parent_dir(path)
     h5open(path, "w") do file
         param_gr = create_group(file, "parameters")
-        param_gr["N_therm"] = params.N_therm
-        param_gr["overrelax_rate"] = params.overrelax_rate
-        param_gr["N_meas"] = params.N_meas
-        param_gr["probe_rate"] = params.probe_rate
-        param_gr["replica_exchange_rate"] = params.replica_exchange_rate
-        param_gr["N"] = system.N
-        param_gr["S"] = system.S
-        param_gr["Js"] = system.Js
-        param_gr["K"] = system.K
-        param_gr["Ts"] = Ts
-        param_gr["delta_12"] = system.delta_12
-        param_gr["h_direction"] = h_direction
-        param_gr["h_sweep"] = h_sweep
-        param_gr["disorder_strength"] = system.disorder_strength
-        param_gr["disorder_seed"] = seed
+
+        function parameter_value(key::String)
+            key_symbol = Symbol(key)
+            if hasproperty(params, key_symbol)
+                return getproperty(params, key_symbol)
+            elseif hasproperty(system, key_symbol)
+                return getproperty(system, key_symbol)
+            elseif hasproperty(config, key_symbol)
+                return getproperty(config, key_symbol)
+            else
+                error("Unknown parameter field: $(key). Update PARAMETER_FIELDS or write_parameters mapping.")
+                return nothing
+            end
+        end
+
+        for key in PARAMETER_FIELDS
+            param_gr[key] = parameter_value(key)
+        end
     end
 end
 
@@ -129,9 +132,9 @@ function collect_hsweep(results_dir::String, file_prefix::String, save_dir::Stri
 
         obs_dict = Dict("magnetization"=>N_h, "magnetization_err"=>N_h, "energy"=>N_h, "energy_err"=>N_h, 
                         "specific_heat"=>N_h, "specific_heat_err"=>N_h,
-                        "susceptibility"=>N_h, "susceptibility_err"=>N_h, "binder"=>N_h, "binder_err"=>N_h,  
-                        "avg_spin"=>(N_h,3,4), "avg_spin_err"=>(N_h,3,4), "dSdT"=>(N_h,3,4), "dSdT_err"=>(N_h,3,4),
-                        "spins"=>(N_h, 3, 4 * N^3))
+                        "susceptibility"=>N_h, "susceptibility_err"=>N_h, "binder_cumulant"=>N_h, "binder_cumulant_err"=>N_h,  
+                        "local_spin"=>(N_h,3,4), "local_spin_err"=>(N_h,3,4), "dSdT"=>(N_h,3,4), "dSdT_err"=>(N_h,3,4),
+                        "spins"=>(N_h,3,4*N^3))
         
         warning = Set{Int64}()
         for rank in 0:(N_ranks-1)
@@ -157,25 +160,10 @@ function collect_hsweep(results_dir::String, file_prefix::String, save_dir::Stri
 end
 
 #saves configurations at various temperatures generated from a single simulated annealing run
-function write_collection_sim_anneal(path::String, configurations_save::Vector{Matrix{Float64}}, params::MCParams, system::SpinSystem, temp_save::Vector{Float64}, h_direction::Vector{Float64}, h_sweep::Vector{Float64}, seed::Int64)
+function write_collection_sim_anneal(path::String, configurations_save::Vector{Matrix{Float64}}, temp_save::Vector{Float64})
     ensure_parent_dir(path)
     h5open(path, "w") do file
-        param_gr = create_group(file, "parameters")
-        param_gr["N_therm"] = params.N_therm
-        param_gr["overrelax_rate"] = params.overrelax_rate
-        param_gr["N_meas"] = params.N_meas
-        param_gr["probe_rate"] = params.probe_rate
-        param_gr["replica_exchange_rate"] = params.replica_exchange_rate
-        param_gr["N"] = system.N
-        param_gr["S"] = system.S
-        param_gr["Js"] = system.Js
-        param_gr["K"] = system.K
-        param_gr["h_direction"] = h_direction
-        param_gr["h_sweep"] = h_sweep
-        param_gr["disorder_strength"] = system.disorder_strength
-        param_gr["disorder_seed"] = seed
-
-        file["Ts"] = temp_save
+        file["temp_save"] = temp_save
 
         for i in eachindex(temp_save)
             file["spins_$(i)"] = configurations_save[i]
@@ -185,9 +173,9 @@ end
 
 function read_configuration_hdf5(path::String, index::Int64)
     h5open(path, "r") do file
-        Ts = read(file["Ts"])
+        temp_save = read(file["temp_save"])
         spins = read(file["spins_$(index)"])
-        return spins, Ts
+        return spins, temp_save
     end
 end
 

@@ -11,12 +11,13 @@ K: #cubic interaction strength (real and imaginary parts)
   - 0.03
   - 0.0
 #external magnetic field parameters
+plane_n1: [1.0, 0.0, 0.0] #first plane vector for theta sweep
+plane_n2: [0.0, 1.0, 0.0] #second plane vector for theta sweep
 h_theta: -54.73561 #magnetic field angle between [111] and [11-2] directions (degrees)
 h_sweep_args:
   - 0.5
   - 3.0
 N_h: 32
-hhl_tilt: 0.0 #tilt angle of hhl plane about [111] axis (degrees)
 delta_12: #quadratic zeeman coupling constants
   - 0.0
   - 0.0

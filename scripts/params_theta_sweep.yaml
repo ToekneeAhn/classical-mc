@@ -44,10 +44,4 @@ sim_anneal:
   T_args: #temperature schedule
     - 0.002
     - 2.0
-  #save configurations at low T for use as initial conditions
-  save_configs: false
-  T_save_args:
-    - 0.001
-    - 0.25
-  N_save: 48
-  save_configs_prefix: "../pt_collect/save_config/Jpm=0_Jpmpm+_h"
+  

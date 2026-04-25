@@ -82,3 +82,10 @@ mutable struct Simulation
     replica_number::Int64 #keeps track of where the replicas go
     replica_label::String
 end
+
+struct RunConfig
+    Ts::Vector{Float64}
+    h_direction::Vector{Float64}
+    h_sweep::Vector{Float64}
+    disorder_seed::Int64
+end

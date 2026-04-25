@@ -4,7 +4,7 @@ include("constants.jl")
 export Z_LOCAL, LOCAL_INTERACTIONS, LOCAL_BASES
 
 include("types.jl")
-export SIPC, SpinSystem, MCParams, Observables, Simulation
+export SIPC, SpinSystem, MCParams, Observables, Simulation, RunConfig
 
 include("observables.jl")
 export measure!, output_results!

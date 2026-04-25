@@ -97,6 +97,7 @@ end
 
 mc_params = MCParams(N_therm, N_det, overrelax_rate, -1, -1, -1, -1)
 simulation = Simulation(system, T_f, mc_params, Observables(), 0, "none")
+config = RunConfig([T_f], h_direction, Vector(h_sweep), disorder_seed)
 
 if r == 0    
     #makes save directories if they doesn't exist
@@ -112,8 +113,8 @@ end
 if save_configs
     #saves at specified temperatures during annealing
     _, configurations_save = sim_anneal!(simulation, t-> T_i * 0.9^t, temp_save, false)
-    #how should we do this...
-    write_collection_sim_anneal(joinpath(save_dir, save_configs_prefix)*"$(h_index).h5", configurations_save, mc_params, system, temp_save, h_direction, [norm(h)], disorder_seed)
+    write_parameters(joinpath(save_dir, save_configs_prefix)*"$(h_index).h5", system, mc_params, config)
+    write_collection_sim_anneal(joinpath(save_dir, save_configs_prefix)*"$(h_index).h5", configurations_save, temp_save)
 else
     sim_anneal!(simulation, t-> T_i * 0.9^t, Float64[], r == 0 ? true : false)
 end
@@ -127,7 +128,7 @@ MPI.Barrier(comm) #barrier in case
 
 #collect results about T_f when sweep finished
 if r == 0
-    write_parameters(parameters_path, system, mc_params, [T_f], h_direction, Vector(h_sweep), disorder_seed)
+    write_parameters(parameters_path, system, mc_params, config)
     collect_hsweep(results_dir, file_prefix*"_h", save_dir, parameters_path)
 end
 
