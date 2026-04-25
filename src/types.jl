@@ -1,4 +1,4 @@
-using StaticArrays
+using StaticArrays, BinningAnalysis
 
 #sublattice-indexed pyrochlore coordinates (sipc)
 struct SIPC
@@ -44,6 +44,22 @@ function SpinSystem(spins, S, N, N_sites, Js, h, delta_12, disorder_strength, ne
                       neighbours, H_bilinear, empty_K, empty_triplets, empty_H_cubic_sparse,
                       empty_unique_triplets, empty_K_vals,
                       empty_pairs, empty_pairs, empty_pairs, zeeman_field)
+end
+
+# observables calculated during simulation
+mutable struct Observables
+    energy::ErrorPropagator{Float64,32} 
+    magnetization_global::Vector{ErrorPropagator{Float64,32}} # 3 components of magnetization in global frame
+    magnetization_along_field::ErrorPropagator{Float64,32} # magnetization along external field direction
+    local_spin::Matrix{ErrorPropagator{Float64,32}} # 3 components of average spin on 4 sublattices in local frame
+    energy_spin_covariance::Matrix{ErrorPropagator{Float64,32}} # covariance between energy and local spin components, used for calculating dS/dT
+    output::Dict{String, Union{Float64, AbstractArray{Float64}}} # dictionary to store final results with error bars for output
+    Observables() = new(ErrorPropagator(Float64, N_args=2), 
+                        [ErrorPropagator(Float64, N_args=3) for i=1:3],                    
+                        ErrorPropagator(Float64, N_args=3), 
+                        [ErrorPropagator(Float64,N_args=2) for i=1:3,j=1:4], 
+                        [ErrorPropagator(Float64,N_args=3) for i=1:3,j=1:4],
+                        Dict{String, Union{Float64, AbstractArray{Float64}}}())
 end
 
 #monte carlo simulation parameters

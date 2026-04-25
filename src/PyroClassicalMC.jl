@@ -3,13 +3,11 @@ module PyroClassicalMC
 include("constants.jl")
 export Z_LOCAL, LOCAL_INTERACTIONS, LOCAL_BASES
 
-include("observables.jl")
-export Observables
-export spin_expec, magnetization_global, std_error_safe
-export specific_heat, susceptibility, binder_cumulant, dSdT
-
 include("types.jl")
-export SIPC, SpinSystem, MCParams, Simulation
+export SIPC, SpinSystem, MCParams, Observables, Simulation
+
+include("observables.jl")
+export measure!, output_results!
 
 include("lattice.jl")
 export local_to_global, pos_mod, get_sublattice, flat_index_3D, sipc_index_3D

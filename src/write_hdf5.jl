@@ -39,31 +39,12 @@ end
 #writes measurements to a file
 function write_observables(path::String, mc::Simulation, spin_config::Matrix{Float64}=zeros(0,0))
     ensure_parent_dir(path)
-    obs = mc.observables
     
-    heat, dheat = specific_heat(mc)
-    susc, dsusc = susceptibility(mc)
-    binder, dbinder = binder_cumulant(mc)
-    susc_T, dsusc_T = dSdT(mc)
-
     h5open(path, "w") do file
         #compute observables
-        file["avg_spin"] = mean(obs.avg_spin,1)
-        file["avg_spin_err"] = std_error(obs.avg_spin,1)
-        file["avg_spin_squared"] = mean(obs.avg_spin,2)
-        file["avg_spin_squared_err"] = std_error(obs.avg_spin,2)
-        file["energy"] = mean(obs.energy, 1)
-        file["energy_err"] = std_error(obs.energy,1)
-        file["magnetization"] = mean(obs.magnetization,1)
-        file["magnetization_err"] = std_error(obs.magnetization,1)
-        file["specific_heat"] = heat
-        file["specific_heat_err"] = dheat
-        file["susceptibility"] = susc
-        file["susceptibility_err"] = dsusc
-        file["binder"] = binder
-        file["binder_err"] = dbinder
-        file["dSdT"] = susc_T
-        file["dSdT_err"] = dsusc_T
+        for (measurement_name, measurement_value) in mc.observables.output
+            file[measurement_name] = measurement_value
+        end
 
         if spin_config !== zeros(0,0)
             file["spins"] = spin_config

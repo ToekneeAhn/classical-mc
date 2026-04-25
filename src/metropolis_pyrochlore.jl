@@ -240,6 +240,8 @@ function sim_anneal!(mc::Simulation, schedule::Function, output_temp::Vector{Flo
     end        
     
     #each simulated annealing run constitutes one measurement (at the end)
+    measure!(mc, E_pyro(mc.spin_system))
+    #=
     E = E_pyro(mc.spin_system)
     avg_spin = spin_expec(mc.spin_system.spins, N)
     m = norm(magnetization_global(avg_spin, LOCAL_BASES, mc.spin_system.h))
@@ -247,6 +249,7 @@ function sim_anneal!(mc::Simulation, schedule::Function, output_temp::Vector{Flo
     push!(mc.observables.energy, E, E^2)
     push!(mc.observables.magnetization, m, m^2, m^4)
     push!(mc.observables.avg_spin, avg_spin, spin_expec(mc.spin_system.spins.^2, N))
+    =#
 
     #thermalization energies and output configurations at requested temperatures
     return energies_therm, output_configurations
@@ -297,10 +300,11 @@ function parallel_temper!(mc::Simulation, rank::Int64, temp::Vector{Float64}, co
 
         if sweep > N_therm && sweep % probe_rate == 0
             #take measurements after thermalization every probe_rate sweeps
+            measure!(mc, E)
+            #=
             avg_spin = spin_expec(mc.spin_system.spins, N)
             m = norm(magnetization_global(avg_spin, LOCAL_BASES, mc.spin_system.h))
-            #do we have to use norm(m)? 
-
+            
             push!(mc.observables.energy, E, E^2)
             push!(mc.observables.magnetization, m, m^2, m^4)
             push!(mc.observables.avg_spin, avg_spin, spin_expec(mc.spin_system.spins.^2, N))
@@ -311,6 +315,7 @@ function parallel_temper!(mc::Simulation, rank::Int64, temp::Vector{Float64}, co
                     push!(mc.observables.energy_spin_covariance[i,mu], E*S_i_mu, E, S_i_mu)
                 end
             end
+            =#
         end 
 
         if sweep % replica_exchange_rate == 0
@@ -353,6 +358,9 @@ function parallel_temper!(mc::Simulation, rank::Int64, temp::Vector{Float64}, co
 
     denom = n_up + n_down
     flow = denom == 0 ? 0.0 : n_up / denom
+
+    # calculate final observables 
+    compute_observables!(mc)
     
     return energies, accept_count_metropolis, accept_count_swap, flow
 end
