@@ -21,7 +21,7 @@ function write_all(path::String, mc::Simulation)
     h5open(path, "w") do file
         for key in fieldnames(SpinSystem)
             value = getfield(mc.spin_system, key)
-            if typeof(value) <: SArray #only have to do this for H_bond because it's a StaticArray
+            if value isa SArray #only have to do this for H_bond because it's a StaticArray
                 file[String(key)] = Array(value)
             else
                 file[String(key)] = value
@@ -37,7 +37,7 @@ function write_all(path::String, mc::Simulation)
 end
 
 #writes measurements to a file
-function write_observables(path::String, mc::Simulation, spin_config::Matrix{Float64}=zeros(0,0))
+function write_observables(path::String, mc::Simulation, spin_config::Union{Nothing,AbstractMatrix}=nothing)
     ensure_parent_dir(path)
     
     h5open(path, "w") do file
@@ -46,7 +46,7 @@ function write_observables(path::String, mc::Simulation, spin_config::Matrix{Flo
             file[measurement_name] = measurement_value
         end
 
-        if spin_config !== zeros(0,0)
+        if !isnothing(spin_config)
             file["spins"] = spin_config
         end
     end
@@ -79,71 +79,93 @@ end
 
 #collects h sweep data from all ranks and all h points into one file, as well as simulation parameters
 function collect_hsweep(results_dir::String, file_prefix::String, save_dir::String, parameters_path::String)
-    raw_files = readdir(results_dir, join=false, sort=false)
+    raw_files = Set(readdir(results_dir, join=false, sort=false))
     
     mkpath(save_dir)
+
+    function collect_group(observable::String, rank::Int64, N_h::Int64)
+        sample_data = nothing
+        for n in 1:N_h
+            sample_file = file_prefix*"$(n)_$(rank).h5"
+            if sample_file in raw_files
+                h5open(joinpath(results_dir, sample_file), "r") do fid
+                    if haskey(fid, observable)
+                        sample_data = read(fid[observable])
+                    end
+                end
+                if sample_data !== nothing
+                    break
+                end
+            end
+        end
+
+        if sample_data === nothing
+            println("Observable $(observable) not found for rank $(rank). Skipping.")
+            return nothing, Int64[]
+        end
+
+        data = Vector{typeof(sample_data)}(undef, N_h)
+        warning_points = Int64[]
+        last_value = sample_data
+
+        for n in 1:N_h
+            fname = file_prefix*"$(n)_$(rank).h5"
+            if fname in raw_files
+                h5open(joinpath(results_dir, fname), "r") do fid
+                    if haskey(fid, observable)
+                        last_value = read(fid[observable])
+                        data[n] = last_value
+                    else
+                        println("Observable $(observable) missing in $(fname). Using last available data point.")
+                        data[n] = last_value
+                        push!(warning_points, n)
+                    end
+                end
+            else
+                println("File $(fname) not found! Using last available data point.")
+                data[n] = last_value
+                push!(warning_points, n)
+            end
+        end
+
+        #stack along a new first axis
+        if sample_data isa AbstractMatrix
+            return permutedims(stack(data), (3,1,2)), warning_points
+        elseif sample_data isa AbstractVector
+            return permutedims(stack(data), (2,1)), warning_points
+        else
+            return data, warning_points
+        end
+    end
 
     h5open(joinpath(save_dir, file_prefix*"sweep.h5"), "w") do file
         param_gr = create_group(file, "parameters")
 
         #read parameters from parameters file
-        N_h, N_ranks, N = h5open(parameters_path, "r") do fid
+        N_h, N_ranks = h5open(parameters_path, "r") do fid
             for key in keys(fid["parameters"])
                 param_gr[key] = read(fid["parameters"][key])
             end
 
             h_len = length(fid["parameters"]["h_sweep"])
             ranks_len = length(fid["parameters"]["Ts"])
-            uc_len = read(fid["parameters"]["N"])
             
-            return h_len, ranks_len, uc_len
+            return h_len, ranks_len
         end
 
-        function collect_group(observable::String, data_dim, rank::Int64)
-            if length(data_dim) > 1
-                data = Matrix{Float64}[]
-            else
-                data = Float64[]
-            end
-
-            warning_points = Int64[]
-
-            for n in 1:N_h
-                fname = file_prefix*"$(n)_$(rank).h5"
-                if fname in raw_files
-                    h5open(joinpath(results_dir,fname),"r") do fid
-                        push!(data, read(fid[observable]))
-                    end
-                else
-                    println("File $(n) not found! Using last available data point.")
-                    push!(data, data[end])
-                    push!(warning_points, n)
-                end 
-            end
-            
-            if length(data_dim) > 1
-                dims = length(data_dim)
-                #stack along a new first axis
-                return permutedims(stack(data), vcat(dims, Vector(1:dims-1))), warning_points
-            else
-                return data, warning_points
-            end
-        end
-
-        obs_dict = Dict("magnetization"=>N_h, "magnetization_err"=>N_h, "energy"=>N_h, "energy_err"=>N_h, 
-                        "specific_heat"=>N_h, "specific_heat_err"=>N_h,
-                        "susceptibility"=>N_h, "susceptibility_err"=>N_h, "binder_cumulant"=>N_h, "binder_cumulant_err"=>N_h,  
-                        "local_spin"=>(N_h,3,4), "local_spin_err"=>(N_h,3,4), "dSdT"=>(N_h,3,4), "dSdT_err"=>(N_h,3,4),
-                        "spins"=>(N_h,3,4*N^3))
-        
         warning = Set{Int64}()
         for rank in 0:(N_ranks-1)
             #all as a function of magnetic field h
             gr = create_group(file, "rank_$(rank)")
-            for (obs, obs_dim) in obs_dict
-                dat, warning_points = collect_group(obs, obs_dim, rank)
+            for obs in OBSERVABLE_FIELDS
+                data, warning_points = collect_group(obs, rank, N_h)
                 
-                gr[obs] = dat
+                if data === nothing
+                    continue
+                end
+
+                gr[obs] = data
+
                 if !isempty(warning_points)
                     push!(warning, warning_points...)
                 end

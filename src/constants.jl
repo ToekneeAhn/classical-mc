@@ -27,3 +27,9 @@ LOCAL_BASES = [Matrix{Float64}(LOCAL_1), Matrix{Float64}(LOCAL_2), Matrix{Float6
 PARAMETER_FIELDS = ["N_therm", "N_meas", "overrelax_rate", "probe_rate", "replica_exchange_rate",
                     "N", "S", "Js", "K", "delta_12", "Ts", 
                     "h_direction", "h_sweep", "disorder_strength", "disorder_seed"]
+
+OBSERVABLE_FIELDS = ["magnetization", "magnetization_global", "energy", "specific_heat", "susceptibility", 
+                    "binder_cumulant", "local_spin", "dSdT",
+                    "magnetization_err", "magnetization_global_err", "energy_err", "specific_heat_err", "susceptibility_err", 
+                    "binder_cumulant_err", "local_spin_err", "dSdT_err",
+                    "spins"]

@@ -1,9 +1,9 @@
 Make the `Observables` struct more general by: 
-- [ ] Make `collect_hsweep` better, e.g. the logic in stacking the data is broken for vector data
-- [ ] Related: add global magnetization to saved observables 
-- [ ] Make the `collect_theta_sweep` better
 - [ ] Allow user to define a list of observables that are tracked during simulation 
+- [ ] Make the `collect_theta_sweep` better?
 - [ ] Support other types of susceptibility (e.g. quadrupolar temperature and field susceptibility)? 
+- [x] Make `collect_hsweep` better, e.g. the logic in stacking the data is broken for vector data
+- [x] Related: add global magnetization to saved observables 
 - [x] Define a `measure!` function which performs all the measurements, for use in parallel tempering and simulated annealing loops
 - [x] Add global magnetization vector measurement
 - [x] Redo `avg_spin` and make it a matrix of `ErrorPropagator`

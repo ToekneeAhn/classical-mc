@@ -83,6 +83,7 @@ mutable struct Simulation
     replica_label::String
 end
 
+# run parameters 
 struct RunConfig
     Ts::Vector{Float64}
     h_direction::Vector{Float64}
