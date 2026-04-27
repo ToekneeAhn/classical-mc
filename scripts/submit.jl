@@ -15,7 +15,7 @@ function generate_sim_anneal_script(julia_script, params_file_runtime, account)
     #SBATCH --cpus-per-task=1
     #SBATCH --mem-per-cpu=$(params["sim_anneal"]["job"]["mem_per_cpu"])
     #SBATCH --time=$(params["sim_anneal"]["job"]["time"])
-    #SBATCH --job-name=$(params["sim_anneal"]["job"]["job_name"])
+    #SBATCH --job-name=$(params["sim_anneal"]["file_prefix"])
     #SBATCH --output=/scratch/antony/slurm_out/%j.out
     #SBATCH --mail-user=t.an@mail.utoronto.ca
     #SBATCH --mail-type=ALL
@@ -48,7 +48,7 @@ function generate_parallel_temper_script_single_node(julia_script, params_file_r
     #SBATCH --cpus-per-task=1
     #SBATCH --mem-per-cpu=$(params["parallel_temper"]["job"]["mem_per_cpu"])
     #SBATCH --time=$(params["parallel_temper"]["job"]["time"])
-    #SBATCH --job-name=$(params["parallel_temper"]["job"]["job_name"])
+    #SBATCH --job-name=$(params["parallel_temper"]["file_prefix"])
     #SBATCH --output=/scratch/antony/slurm_out/%j.out
     #SBATCH --mail-user=t.an@mail.utoronto.ca
     #SBATCH --mail-type=ALL
@@ -84,7 +84,7 @@ function generate_parallel_temper_script(julia_script, params_file_runtime, acco
     #SBATCH --cpus-per-task=1
     #SBATCH --mem-per-cpu=$(params["parallel_temper"]["job"]["mem_per_cpu"])
     #SBATCH --time=$(params["parallel_temper"]["job"]["time"])
-    #SBATCH --job-name=$(params["parallel_temper"]["job"]["job_name"])
+    #SBATCH --job-name=$(params["parallel_temper"]["file_prefix"])
     #SBATCH --output=/scratch/antony/slurm_out/%j.out
     #SBATCH --mail-user=t.an@mail.utoronto.ca
     #SBATCH --mail-type=ALL
@@ -126,7 +126,7 @@ function generate_parallel_temper_collection_script(params_file_runtime, account
     #SBATCH --cpus-per-task=1
     #SBATCH --mem-per-cpu=4000M
     #SBATCH --time=1:00:00
-    #SBATCH --job-name=collect_pt
+    #SBATCH --job-name=$(params["parallel_temper"]["file_prefix"])_collect
     #SBATCH --output=/scratch/antony/slurm_out/%j.out
     #SBATCH --mail-user=t.an@mail.utoronto.ca
     #SBATCH --mail-type=ALL
@@ -173,7 +173,7 @@ function generate_theta_collection_script(params_file_runtime, account)
     #SBATCH --cpus-per-task=1
     #SBATCH --mem-per-cpu=4000M
     #SBATCH --time=1:00:00
-    #SBATCH --job-name=collect_theta
+    #SBATCH --job-name=$(params["sim_anneal"]["file_prefix"])_collect
     #SBATCH --output=/scratch/antony/slurm_out/%j.out
     #SBATCH --mail-user=t.an@mail.utoronto.ca
     #SBATCH --mail-type=ALL
@@ -220,7 +220,7 @@ function generate_theta_sweep_script(julia_script, params_file_runtime, account)
     #SBATCH --cpus-per-task=1
     #SBATCH --mem=0  # Request all memory on the node
     #SBATCH --time=$(params["sim_anneal"]["job"]["time"])
-    #SBATCH --job-name=$(params["sim_anneal"]["job"]["job_name"])_array
+    #SBATCH --job-name=$(params["sim_anneal"]["file_prefix"])
     #SBATCH --output=/scratch/antony/slurm_out/%A_%a_node.out
     #SBATCH --mail-user=t.an@mail.utoronto.ca
     #SBATCH --mail-type=ALL

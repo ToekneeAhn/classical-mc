@@ -1,4 +1,5 @@
 using BinningAnalysis
+#note: the relevant struct Observables is defined in types.jl
 
 #average spin on sublattice in local frame
 function spin_expec(spins::Array{Float64,2}, N::Int64)::Array{Float64,2}
@@ -36,14 +37,26 @@ function measure!(mc::Simulation, energy::Float64)
             push!(mc.observables.energy_spin_covariance[i,mu], energy*S_i_mu, energy, S_i_mu) # covariance between energy and local spin component
          end
     end
+
+    for q in 1:5
+        Q_q = sum(Q_MASKS[q] .* local_spin_expec)
+        push!(mc.observables.energy_quadrupolar_covariance[q], energy*Q_q, energy, Q_q) # covariance between energy and quadrupolar order parameter
+    end
+
     push!(mc.observables.magnetization_along_field, m_along_field, m_along_field^2, m_along_field^4)
     push!(mc.observables.energy, energy, energy^2)
 end
 
-#the same as std_error() but takes absolute value of variance 
-#due to floating point error, the variance can become negative if it's too close to zero (?)
+# numerically safe standard error wrapper for tiny negative variances from floating-point roundoff
+_stderr_from_var(v::Number) = sqrt(max(0.0, v))
+_stderr_from_var(v::AbstractArray) = sqrt.(max.(0.0, v))
+
+function std_error_safe(ep::ErrorPropagator, i::Integer, lvl = BinningAnalysis._reliable_level(ep))
+    return _stderr_from_var(varN(ep, i, lvl))
+end
+
 function std_error_safe(ep::ErrorPropagator, gradient::Function, lvl = BinningAnalysis._reliable_level(ep))
-    return sqrt(abs(varN(ep, gradient, lvl)))
+    return _stderr_from_var(varN(ep, gradient, lvl))
 end
 
 #specific heat per site
@@ -119,7 +132,7 @@ function local_spin_expectation(mc::Simulation)
     for i in 1:3
         for mu in 1:4
             local_spin_expec[i,mu] = mean(mc.observables.local_spin[i,mu], 1) # 1 refers to the index of the dataset
-            d_local_spin_expec[i,mu] = std_error(mc.observables.local_spin[i,mu], 1)
+            d_local_spin_expec[i,mu] = std_error_safe(mc.observables.local_spin[i,mu], 1)
         end
     end
     return local_spin_expec, d_local_spin_expec
@@ -131,26 +144,53 @@ function magnetization_global(mc::Simulation)
 
     for i in 1:3
         m_global[i] = mean(mc.observables.magnetization_global[i], 1) 
-        d_m_global[i] = std_error(mc.observables.magnetization_global[i], 1)
+        d_m_global[i] = std_error_safe(mc.observables.magnetization_global[i], 1)
     end
     return m_global, d_m_global
 end
 
+function dQdT(mc::Simulation)
+    EQ = mc.observables.energy_quadrupolar_covariance 
+    
+    dqdT_comp = zeros(5)
+    d_dqdT_comp = similar(dqdT_comp)
+    
+    temp = mc.T
+    
+    cov(v) = 1/temp^2 * (v[1] - v[2]*v[3])
+    grad_cov(v) = 1/temp^2 .* [1.0, -v[3], -v[2]]
+    
+    for q in 1:5
+        dqdT_comp[q] = mean(EQ[q], cov)
+        d_dqdT_comp[q] = std_error_safe(EQ[q], grad_cov)
+    end
+    
+    return dqdT_comp, d_dqdT_comp
+end
+
+function _energy_observable(mc::Simulation)
+    energy = mean(mc.observables.energy, 1)
+    d_energy = std_error_safe(mc.observables.energy, 1)
+    return energy, d_energy
+end
+
+function _magnetization_observable(mc::Simulation)
+    m_along_field = mean(mc.observables.magnetization_along_field, 1)
+    d_m_along_field = std_error_safe(mc.observables.magnetization_along_field, 1)
+    return m_along_field, d_m_along_field
+end
+
 function compute_observables!(mc::Simulation)
-    measurements = Dict("specific_heat" => specific_heat, 
+    measurements = Dict("energy" => _energy_observable,
+                        "magnetization" => _magnetization_observable,
+                        "specific_heat" => specific_heat, 
                         "susceptibility" => susceptibility, 
                         "binder_cumulant" => binder_cumulant, 
                         "local_spin" => local_spin_expectation,
                         "dSdT" => dSdT,
-                        "magnetization_global" => magnetization_global)
-
-    # default measurements: energy, magnetization along field
-    # could make specific functions for these for cleaner code
-    mc.observables.output["energy"] = mean(mc.observables.energy, 1)
-    mc.observables.output["energy_err"] = std_error(mc.observables.energy, 1)
-    mc.observables.output["magnetization"] = mean(mc.observables.magnetization_along_field, 1)
-    mc.observables.output["magnetization_err"] = std_error(mc.observables.magnetization_along_field, 1)
-
+                        "magnetization_global" => magnetization_global,
+                        "dQdT" => dQdT)
+    
     for measurement_name in keys(measurements)
         measurement_func = measurements[measurement_name]
         result, error = measurement_func(mc)

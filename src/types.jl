@@ -53,12 +53,14 @@ mutable struct Observables
     magnetization_along_field::ErrorPropagator{Float64,32} # magnetization along external field direction
     local_spin::Matrix{ErrorPropagator{Float64,32}} # 3 components of average spin on 4 sublattices in local frame
     energy_spin_covariance::Matrix{ErrorPropagator{Float64,32}} # covariance between energy and local spin components, used for calculating dS/dT
+    energy_quadrupolar_covariance::Vector{ErrorPropagator{Float64,32}} # covariance between energy and quadrupolar order parameter, used for calculating dQ/dT  
     output::Dict{String, Union{Float64, AbstractArray{Float64}}} # dictionary to store final results with error bars for output
     Observables() = new(ErrorPropagator(Float64, N_args=2), 
                         [ErrorPropagator(Float64, N_args=3) for i=1:3],                    
                         ErrorPropagator(Float64, N_args=3), 
                         [ErrorPropagator(Float64,N_args=2) for i=1:3,j=1:4], 
                         [ErrorPropagator(Float64,N_args=3) for i=1:3,j=1:4],
+                        [ErrorPropagator(Float64,N_args=3) for i=1:5],
                         Dict{String, Union{Float64, AbstractArray{Float64}}}())
 end
 

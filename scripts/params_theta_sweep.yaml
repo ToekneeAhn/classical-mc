@@ -33,7 +33,6 @@ sim_anneal:
   job:
     time: "6:00:00"
     mem_per_cpu: "1000M"
-    job_name: "piflux_delta++_xy"
   file_prefix: "piflux_delta=++0.002_xy"
   results_dir: "/scratch/antony/sim_anneal_out" #temporary storage
   save_dir: "/scratch/antony/theta_sweep" #final storage
