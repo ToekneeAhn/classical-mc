@@ -1,4 +1,4 @@
-using HDF5, StaticArrays
+using HDF5, StaticArrays, YAML
 
 function ensure_parent_dir(path::String)
     dir = dirname(path)
@@ -201,7 +201,7 @@ function read_configuration_hdf5(path::String, index::Int64)
     end
 end
 
-function collect_theta_sweep(results_dir::String, file_prefix::String, save_dir::String, theta_min::Float64, theta_max::Float64, N_theta::Int64)
+function collect_theta_sweep(results_dir::String, file_prefix::String, save_dir::String, theta_min::Float64, theta_max::Float64, N_theta::Int64; params_file::Union{Nothing,String}=nothing)
     raw_files = readdir(results_dir, join=false, sort=false)
     theta_values = collect(range(theta_min, theta_max, length=N_theta))
     
@@ -269,6 +269,16 @@ function collect_theta_sweep(results_dir::String, file_prefix::String, save_dir:
             for key in keys(fid["parameters"])
                 param_gr[key] = read(fid["parameters"][key])
             end
+
+            if params_file !== nothing
+                params = YAML.load_file(params_file)
+                if haskey(params, "plane_n1") && haskey(params, "plane_n2")
+                    pv = create_group(param_gr, "plane_vectors")
+                    pv["plane_vector_1"] = Float64.(params["plane_n1"])
+                    pv["plane_vector_2"] = Float64.(params["plane_n2"])
+                end
+            end
+
             file["h_values"] = read(fid["parameters"]["h_sweep"])
         end
         

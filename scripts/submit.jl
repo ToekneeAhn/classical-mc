@@ -187,7 +187,7 @@ function generate_theta_collection_script(params_file_runtime, account)
 
     # run collection script
     cd /home/antony/classical-mc
-    if julia --project=/home/antony/classical-mc -e "using PyroClassicalMC; collect_theta_sweep(\\\"$save_dir\\\", \\\"$file_prefix\\\", \\\"$collect_dir\\\", $theta_min, $theta_max, $N_theta)"; then
+    if julia --project=/home/antony/classical-mc -e "using PyroClassicalMC; collect_theta_sweep(\\\"$save_dir\\\", \\\"$file_prefix\\\", \\\"$collect_dir\\\", $theta_min, $theta_max, $N_theta; params_file=\\\"$params_file_runtime\\\")"; then
         # clean up only when collection succeeds
         cd "\$RESULTS_DIR"
         rm -- "\${FILE_PREFIX}"*

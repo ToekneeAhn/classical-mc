@@ -2,8 +2,8 @@
 N_uc: 6 #number of unit cells
 S: 0.5 #spin length
 Js: #exchange coupling constants
-  - 2.0
-  - -0.5
+  - 1.0
+  - -0.3
   - 0.01
   - 0.0
 include_cubic: false #whether to include cubic spin interaction S^z S^+ S^z
@@ -11,8 +11,8 @@ K: #cubic interaction strength (real and imaginary parts)
   - 0.0
   - 0.0
 #external magnetic field parameters
-plane_n1: [1.0, 0.0, 0.0] #first plane vector for theta sweep
-plane_n2: [0.0, 1.0, 0.0] #second plane vector for theta sweep
+plane_n1: [1.0, -1.0, 0.0] #first plane vector for theta sweep
+plane_n2: [1.0, 1.0, -1.0] #second plane vector for theta sweep
 #theta is defined so that theta=0 points along n1 and theta=90 points along n2
 theta_args: #angles for theta sweep (in degrees)
   - 0.0
@@ -20,7 +20,7 @@ theta_args: #angles for theta sweep (in degrees)
 N_theta: 180
 h_sweep_args:
   - 0.1
-  - 16.75
+  - 10.0
 N_h: 64
 delta_12: #quadratic zeeman coupling constants
   - 0.002
@@ -33,14 +33,20 @@ sim_anneal:
   job:
     time: "6:00:00"
     mem_per_cpu: "1000M"
-  file_prefix: "piflux_delta=++0.002_xy"
+  file_prefix: "piflux_delta=++0.002_newplaneapprox"
   results_dir: "/scratch/antony/sim_anneal_out" #temporary storage
-  save_dir: "/scratch/antony/theta_sweep" #final storage
+  save_dir: "/scratch/antony/theta_sweep/collect" #final storage
   mc_params:
     N_therm: 1000000
     overrelax_rate: 10
     N_det: 0
   T_args: #temperature schedule
-    - 0.002
+    - 0.001
     - 2.0
-  
+  #save configurations at low T for use as initial conditions
+  save_configs: false
+  T_save_args:
+    - 0.001
+    - 0.25
+  N_save: 48
+  save_configs_prefix: "/scratch/antony/pt_collect/save_config/Jpm=0_Jpmpm+_h"
