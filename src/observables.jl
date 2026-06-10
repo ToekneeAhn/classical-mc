@@ -12,6 +12,15 @@ function spin_expec(spins::Array{Float64,2}, N::Int64)::Array{Float64,2}
     return s_avg / N^3
 end
 
+# norm of quadrupolar order parameter 
+function quadrupolar_order(local_spin_expec::AbstractMatrix, masks::Tuple{Vararg{String}})
+    q = 0.0
+    for key in masks
+        q += sum(QUADRUPOLAR_MASKS[key] .* local_spin_expec)^2
+    end
+    return sqrt(q)
+end
+
 function measure!(mc::Simulation, energy::Float64)
     spins = mc.spin_system.spins
     h = mc.spin_system.h
@@ -38,9 +47,9 @@ function measure!(mc::Simulation, energy::Float64)
          end
     end
 
-    for q in 1:5
-        Q_q = sum(Q_MASKS[q] .* local_spin_expec)
-        push!(mc.observables.energy_quadrupolar_covariance[q], energy*Q_q, energy, Q_q) # covariance between energy and quadrupolar order parameter
+    Q_vals = map(spec -> quadrupolar_order(local_spin_expec, spec.masks), Q_SPECS)
+    for (i, Q) in enumerate(Q_vals)
+        push!(mc.observables.energy_quadrupolar_covariance[i], energy * Q, energy, Q) # covariance between energy and quadrupolar order parameter
     end
 
     push!(mc.observables.magnetization_along_field, m_along_field, m_along_field^2, m_along_field^4)
@@ -152,7 +161,7 @@ end
 function dQdT(mc::Simulation)
     EQ = mc.observables.energy_quadrupolar_covariance 
     
-    dqdT_comp = zeros(5)
+    dqdT_comp = zeros(length(Q_SPECS))
     d_dqdT_comp = similar(dqdT_comp)
     
     temp = mc.T
@@ -160,12 +169,25 @@ function dQdT(mc::Simulation)
     cov(v) = 1/temp^2 * (v[1] - v[2]*v[3])
     grad_cov(v) = 1/temp^2 .* [1.0, -v[3], -v[2]]
     
-    for q in 1:5
+    for q in eachindex(Q_SPECS)
         dqdT_comp[q] = mean(EQ[q], cov)
         d_dqdT_comp[q] = std_error_safe(EQ[q], grad_cov)
     end
     
     return dqdT_comp, d_dqdT_comp
+end
+
+function _Q_observable(mc::Simulation)
+    EQ = mc.observables.energy_quadrupolar_covariance
+    Q_comp = zeros(length(Q_SPECS))
+    d_Q_comp = similar(Q_comp)
+
+    for q in eachindex(Q_SPECS)
+        Q_comp[q] = mean(EQ[q], 3) # 3 refers to the index of the dataset for quadrupolar order parameter
+        d_Q_comp[q] = std_error_safe(EQ[q], 3)
+    end
+
+    return Q_comp, d_Q_comp
 end
 
 function _energy_observable(mc::Simulation)
@@ -189,7 +211,8 @@ function compute_observables!(mc::Simulation)
                         "local_spin" => local_spin_expectation,
                         "dSdT" => dSdT,
                         "magnetization_global" => magnetization_global,
-                        "dQdT" => dQdT)
+                        "dQdT" => dQdT,
+                        "Q" => _Q_observable)
     
     for measurement_name in keys(measurements)
         measurement_func = measurements[measurement_name]

@@ -23,29 +23,52 @@ LOCAL_3 = [2/sqrt(6) 1/sqrt(6) -1/sqrt(6); 0 -1/sqrt(2) -1/sqrt(2); -1/sqrt(3) 1
 LOCAL_4 = [2/sqrt(6) -1/sqrt(6) 1/sqrt(6); 0 1/sqrt(2) 1/sqrt(2); -1/sqrt(3) -1/sqrt(3) 1/sqrt(3)]'
 LOCAL_BASES = [Matrix{Float64}(LOCAL_1), Matrix{Float64}(LOCAL_2), Matrix{Float64}(LOCAL_3), Matrix{Float64}(LOCAL_4)]
 
-# quadrupolar order parameter definitions
-Q_1_MASK = [sqrt(3) sqrt(3) sqrt(3) sqrt(3);
-            -1 -1 -1 -1;
-            0 0 0 0]
+# quadrupolar order parameter definitions for Kramers moments, see Patri (2020) table II first column
+# Q_1 and Q_2 correspond to the E_g irrep of T_d (psi_2/psi_3)
+Q_1_MASK = 0.5*[1 1 1 1;
+                0 0 0 0;
+                0 0 0 0]
 
-Q_2_MASK = [1 1 1 1;
-            sqrt(3) sqrt(3) sqrt(3) sqrt(3);
-            0 0 0 0]
+Q_2_MASK = 0.5*[0 0 0 0;
+                1 1 1 1;
+                0 0 0 0]
 
-Q_xy_MASK = [-1 1 1 -1;
-             -sqrt(3) sqrt(3) sqrt(3) -sqrt(3)
+#Q_xy, Q_xz, and Q_yz correspond to T_2g irrep of T_d (palmer-chalker for Kramers moments)
+Q_yz_MASK = 0.5*[1 1 -1 -1;
+                0 0 0 0;
+                0 0 0 0]
+
+Q_xz_MASK = 0.25*[-1 1 -1 1;
+             sqrt(3) -sqrt(3) sqrt(3) -sqrt(3);
              0 0 0 0]
 
-Q_xz_MASK = [-1 1 -1 1;
-             sqrt(3) -sqrt(3) sqrt(3) -sqrt(3)
+Q_xy_MASK = 0.25*[-1 1 1 -1;
+             -sqrt(3) sqrt(3) sqrt(3) -sqrt(3);
              0 0 0 0]
+             
+#Q_x, Q_y, and Q_z correspond to T_1g irrep of T_d (splayed ferromagnet for Kramers moments)
+Q_x_MASK = 0.5*[0 0 0 0;
+                1 1 -1 -1;
+                0 0 0 0]
 
-Q_yz_MASK = [1 1 -1 -1;
-             0 0 0 0;
-             0 0 0 0] 
+Q_y_MASK = 0.25*[-sqrt(3) sqrt(3) -sqrt(3) sqrt(3);
+                -1 1 -1 1;
+                0 0 0 0]
 
-# order in which the quadrupolar susceptibilities are calculated and output
-Q_MASKS = Dict(1=>Q_1_MASK, 2=>Q_2_MASK, 3=>Q_xy_MASK, 4=>Q_xz_MASK, 5=>Q_yz_MASK)
+Q_z_MASK = 0.25*[sqrt(3) -sqrt(3) -sqrt(3) sqrt(3);
+                -1 1 1 -1;
+                0 0 0 0]
+
+QUADRUPOLAR_MASKS = Dict("Q1"=>Q_1_MASK, "Q2"=>Q_2_MASK, 
+                        "Qxy"=>Q_xy_MASK, "Qxz"=>Q_xz_MASK, "Qyz"=>Q_yz_MASK, 
+                        "Qx"=>Q_x_MASK, "Qy"=>Q_y_MASK, "Qz"=>Q_z_MASK)
+
+# quadrupolar order parameters derived from these mask groupings
+Q_SPECS = (
+    (name = "Q_E", masks = ("Q1", "Q2")),
+    (name = "Q_T1", masks = ("Qx", "Qy", "Qz")),
+    (name = "Q_T2", masks = ("Qxy", "Qxz", "Qyz")),
+)
 
 # I/O 
 PARAMETER_FIELDS = ["N_therm", "N_meas", "overrelax_rate", "probe_rate", "replica_exchange_rate",
