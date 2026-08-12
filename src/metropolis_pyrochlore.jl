@@ -126,18 +126,26 @@ function spins_initial_pyro(N::Int64, S::Float64)::Array{Float64,2}
     return spins
 end
 
-#picks a point on the unit sphere uniformly and returns Cartesian coordinates (Sx,Sy,Sz)
-#then scales magnitude by S
+#picks a point on the unit sphere uniformly and returns Cartesian coordinates (Sx,Sy,Sz), then scales magnitude by S
+#=
 function sphere_pick(S::Float64)::NTuple{3,Float64}
-    #faster rng? lehmer prng
-    #gaussian sphere picking for lower temperatures
     phi = 2*pi*rand()
     z = 2*rand() - 1
     return S .* (sqrt(1-z^2)*cos(phi), sqrt(1-z^2)*sin(phi), z)
 end
+=#
 
-#metropolis algorithm with deterministic updates (aligning spins to their local field)
-function metropolis!(sys::SpinSystem, accept_count::Array{Int64,1},T::Float64)
+# picks a point uniformly distributed on the spherical cap theta < theta_max
+# returns Cartesian coordinates (Sx,Sy,Sz), then scales magnitude by S
+function sphere_pick(S::Float64, theta_max::Float64=pi)::NTuple{3,Float64}
+    phi = 2*pi*rand()
+    z = cos(theta_max) + (1 - cos(theta_max)) * rand() 
+    return S .* (sqrt(1-z^2)*cos(phi), sqrt(1-z^2)*sin(phi), z)
+end
+
+#metropolis algorithm 
+#TODO: implement adaptive metropolis which adjusts theta_max depending on the acceptance rate
+function metropolis!(sys::SpinSystem, accept_count::Array{Int64,1}, T::Float64)
     N_sites = sys.N_sites
     
     for site in 1:N_sites #1 sweep has N_sites steps
@@ -158,6 +166,7 @@ function metropolis!(sys::SpinSystem, accept_count::Array{Int64,1},T::Float64)
     end 
 end
 
+#deterministic updates (aligning spins to their local field)
 function det_update!(sys::SpinSystem)
     for n in 1:sys.N_sites
         h_loc = local_field_pyro(sys, n)

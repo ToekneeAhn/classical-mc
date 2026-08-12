@@ -25,6 +25,7 @@ Js = cfg.Js
 include_cubic = cfg.include_cubic
 K = cfg.K
 h_sweep_args = cfg.h_sweep_args
+breaking_field = cfg.breaking_field
 N_h = cfg.N_h
 delta_12 = cfg.delta_12
 disorder_strength = cfg.disorder_strength
@@ -88,7 +89,7 @@ unique_triplets, unique_H_cubic_vals = unique_cubic_triplets(K, N, N_sites)
 pairs_i, pairs_j, pairs_k = cubic_pairs_split_all(cubic_sites, N_sites)
 H_cubic_sparse = cubic_tensors_sparse_all(K, N, N_sites)
 
-zeeman = zeeman_field_random(h, Z_LOCAL, LOCAL_INTERACTIONS, delta_12, disorder_strength, N_sites, disorder_seed)
+zeeman = effective_zeeman_field(h, Z_LOCAL, LOCAL_INTERACTIONS, delta_12, disorder_strength, N_sites, disorder_seed, breaking_field)
 
 if include_cubic
     system = SpinSystem(spins_r, S, N, N_sites, Js, h, delta_12, disorder_strength, neighbours, H_bilinear, K, cubic_sites, H_cubic_sparse, unique_triplets, unique_H_cubic_vals, pairs_i, pairs_j, pairs_k, zeeman)
@@ -105,6 +106,9 @@ end
 mc_params = MCParams(N_therm, -1, overrelax_rate, N_meas, probe_rate, replica_exchange_rate, optimize_temperature_rate)
 obs = Observables()
 simulation = Simulation(system, Ts[r+1], mc_params, obs, r, "none") 
+if r == 0 
+    println("Loaded parameters from $(parsed_args["params_file"])")
+end
 
 energies_r, accept_metropolis_r, accept_swap_r, flow_r = parallel_temper!(simulation, r, Ts, comm, comm_size)
 gather_accept_metropolis = MPI.Gather(accept_metropolis_r[1], comm, root=0)

@@ -16,7 +16,7 @@ export cubic_sites_pyro, cubic_sites_all, cubic_pairs_split_all
 
 include("interactions.jl")
 export unique_cubic_triplets, cubic_tensors_sparse_all, cubic_tensors_all
-export H_bilinear_all, zeeman_field_random
+export H_bilinear_all, effective_zeeman_field
 
 include("metropolis_pyrochlore.jl")
 export local_field_pyro, E_pyro, energy_difference_pyro

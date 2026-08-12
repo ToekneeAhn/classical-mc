@@ -56,6 +56,7 @@ function load_config(params_file::AbstractString, job_type::Symbol; theta_index:
         disorder_seed=params["disorder_seed"],
         h_direction=h_direction,
         theta_args=theta_args,
+        breaking_field=haskey(params, "breaking_field") ? [Float64.(v) for v in params["breaking_field"]] : [zeros(3), zeros(3), zeros(3), zeros(3)],
     )
 
     if job_type == :sim_anneal

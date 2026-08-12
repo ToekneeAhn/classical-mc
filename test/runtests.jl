@@ -87,7 +87,7 @@ end
     disorder_strength = 0.0
 
     H_bilinear = H_bilinear_all(Js, N, N_sites)
-    zeeman = zeeman_field_random(h, Z_LOCAL, LOCAL_INTERACTIONS, delta_12, disorder_strength, N_sites, 123)
+    zeeman = effective_zeeman_field(h, Z_LOCAL, LOCAL_INTERACTIONS, delta_12, disorder_strength, N_sites, 123)
 
     system = SpinSystem(spins, S, N, N_sites, Js, h, delta_12, disorder_strength, neighbours, H_bilinear, zeeman)
     params = MCParams(0, 0, 0, 0, 0, 0, 0)

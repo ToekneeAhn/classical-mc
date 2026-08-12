@@ -76,7 +76,7 @@ PARAMETER_FIELDS = ["N_therm", "N_meas", "overrelax_rate", "probe_rate", "replic
                     "h_direction", "h_sweep", "disorder_strength", "disorder_seed"]
 
 OBSERVABLE_FIELDS = ["magnetization", "magnetization_global", "energy", "specific_heat", "susceptibility", 
-                    "binder_cumulant", "local_spin", "dSdT", "dQdT",
+                    "binder_cumulant", "local_spin", "dSdT", "dQdT", "Q",
                     "magnetization_err", "magnetization_global_err", "energy_err", "specific_heat_err", "susceptibility_err", 
-                    "binder_cumulant_err", "local_spin_err", "dSdT_err", "dQdT_err",
+                    "binder_cumulant_err", "local_spin_err", "dSdT_err", "dQdT_err", "Q_err",
                     "spins"]

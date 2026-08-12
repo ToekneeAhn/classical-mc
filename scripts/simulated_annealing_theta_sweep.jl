@@ -86,7 +86,7 @@ unique_triplets, unique_H_cubic_vals = unique_cubic_triplets(K, N, N_sites)
 pairs_i, pairs_j, pairs_k = cubic_pairs_split_all(cubic_sites, N_sites)
 H_cubic_sparse = cubic_tensors_sparse_all(K, N, N_sites)
 
-zeeman = zeeman_field_random(h, Z_LOCAL, LOCAL_INTERACTIONS, delta_12, disorder_strength, N_sites, disorder_seed)
+zeeman = effective_zeeman_field(h, Z_LOCAL, LOCAL_INTERACTIONS, delta_12, disorder_strength, N_sites, disorder_seed)
 
 if include_cubic
     system = SpinSystem(spins, S, N, N_sites, Js, h, delta_12, disorder_strength, neighbours, H_bilinear, K, cubic_sites, H_cubic_sparse, unique_triplets, unique_H_cubic_vals, pairs_i, pairs_j, pairs_k, zeeman)

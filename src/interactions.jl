@@ -113,7 +113,7 @@ function H_bilinear_all(Js::Vector{Float64}, N::Int64, N_sites::Int64)
     return H_bilinear
 end
 
-function zeeman_field_random(h, z_local, local_interactions, delta_12, G, N_sites, seed=123, breaking_field=[zeros(3), zeros(3), zeros(3), zeros(3)])::Vector{NTuple{3,Float64}}
+function effective_zeeman_field(h, z_local, local_interactions, delta_12, G, N_sites, seed=123, breaking_field=[zeros(3), zeros(3), zeros(3), zeros(3)])::Vector{NTuple{3,Float64}}
     Random.seed!(seed)
 
     zeeman_eff = NTuple{3,Float64}[]
