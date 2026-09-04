@@ -127,19 +127,9 @@ function spins_initial_pyro(N::Int64, S::Float64)::Array{Float64,2}
 end
 
 #picks a point on the unit sphere uniformly and returns Cartesian coordinates (Sx,Sy,Sz), then scales magnitude by S
-#=
 function sphere_pick(S::Float64)::NTuple{3,Float64}
     phi = 2*pi*rand()
     z = 2*rand() - 1
-    return S .* (sqrt(1-z^2)*cos(phi), sqrt(1-z^2)*sin(phi), z)
-end
-=#
-
-# picks a point uniformly distributed on the spherical cap theta < theta_max
-# returns Cartesian coordinates (Sx,Sy,Sz), then scales magnitude by S
-function sphere_pick(S::Float64, theta_max::Float64=pi)::NTuple{3,Float64}
-    phi = 2*pi*rand()
-    z = cos(theta_max) + (1 - cos(theta_max)) * rand() 
     return S .* (sqrt(1-z^2)*cos(phi), sqrt(1-z^2)*sin(phi), z)
 end
 
