@@ -21,6 +21,22 @@ function quadrupolar_order(local_spin_expec::AbstractMatrix, masks::Tuple{Vararg
     return sqrt(q)
 end
 
+function elastic_correction(local_spin_expec::AbstractMatrix, h::Vector{Float64}, operator_name::String, mask::AbstractMatrix)
+    h_local = [transpose(LOCAL_BASES[mu]) * h for mu in 1:4]
+    hz_mask = zeros(3,4)
+
+    if operator_name == "V_MU"
+        h_component = 1
+    elseif operator_name == "V_NU"
+        h_component = 2
+    else
+        h_component = 3
+    end
+
+    hz_mask[h_component,:] .= [h_local[mu][3] for mu in 1:4]
+    return sum(hz_mask .* mask .* local_spin_expec)
+end
+
 function measure!(mc::Simulation, energy::Float64)
     spins = mc.spin_system.spins
     h = mc.spin_system.h
@@ -50,6 +66,11 @@ function measure!(mc::Simulation, energy::Float64)
     Q_vals = map(spec -> quadrupolar_order(local_spin_expec, spec.masks), Q_SPECS)
     for (i, Q) in enumerate(Q_vals)
         push!(mc.observables.energy_quadrupolar_covariance[i], energy * Q, energy, Q) # covariance between energy and quadrupolar order parameter
+    end
+
+    elastic_correction_vals = [elastic_correction(local_spin_expec, h, operator_name, mask) for (operator_name, mask) in ELASTIC_CORRECTION_SPECS]
+    for (i, V) in enumerate(elastic_correction_vals)
+        push!(mc.observables.elastic_correction_covariance[i], V, V*V)
     end
 
     push!(mc.observables.magnetization_along_field, m_along_field, m_along_field^2, m_along_field^4)
@@ -190,6 +211,24 @@ function _Q_observable(mc::Simulation)
     return Q_comp, d_Q_comp
 end
 
+function _elastic_correction_observable(mc::Simulation)
+    VV = mc.observables.elastic_correction_covariance
+    V_comp = zeros(length(ELASTIC_CORRECTION_SPECS))
+    d_V_comp = similar(V_comp)
+
+    temp = mc.T
+    # indexing follows convention of specific_heat
+    cov(v) = 1/temp * (v[2] - v[1]*v[1])
+    grad_cov(v) = 1/temp .* [-2*v[1], 1.0]
+
+    for i in eachindex(ELASTIC_CORRECTION_SPECS)
+        V_comp[i] = mean(VV[i], cov)
+        d_V_comp[i] = std_error_safe(VV[i], grad_cov)
+    end
+
+    return V_comp, d_V_comp
+end
+
 function _energy_observable(mc::Simulation)
     energy = mean(mc.observables.energy, 1)
     d_energy = std_error_safe(mc.observables.energy, 1)
@@ -212,7 +251,8 @@ function compute_observables!(mc::Simulation)
                         "dSdT" => dSdT,
                         "magnetization_global" => magnetization_global,
                         "dQdT" => dQdT,
-                        "Q" => _Q_observable)
+                        "Q" => _Q_observable,
+                        "elastic_correction" => _elastic_correction_observable)
     
     for measurement_name in keys(measurements)
         measurement_func = measurements[measurement_name]

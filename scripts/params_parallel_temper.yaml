@@ -2,9 +2,9 @@
 N_uc: 6 #number of unit cells along each direction
 S: 0.5 #spin length
 Js: #exchange coupling constants
-  - 1.0
-  - 0.25
-  - 0.25
+  - 3.6
+  - -0.6
+  - 0.01
   - 0.0
 include_cubic: false #whether to include cubic spin interaction S^z S^+ S^z
 K: #cubic interaction strength (real and imaginary parts)
@@ -15,14 +15,14 @@ plane_n1: [1.0, 1.0, 1.0] #first plane vector for theta sweep
 plane_n2: [0.0, 1.0, 0.0] #second plane vector for theta sweep
 h_theta: 0.0 #magnetic field angle between plane_n1 and plane_n2 (degrees)
 h_sweep_args:
-  - 0.0
-  - 0.0
+  - 5.0
+  - 11.0
 breaking_field:
   - [0.0, 0.0, 0.0]
   - [0.0, 0.0, 0.0]
   - [0.0, 0.0, 0.0]
   - [0.0, 0.0, 0.0]
-N_h: 1
+N_h: 50
 delta_12: #quadratic zeeman coupling constants
   - 0.0
   - 0.0
@@ -32,11 +32,11 @@ disorder_seed: 123456
 #parallel tempering simulation parameters
 parallel_temper:
   job:
-    time: "1:00:00"
+    time: "4:00:00"
     mem_per_cpu: "4000M"
     h_points_per_node: 1
   mc_params:
-    N_therm: 500000
+    N_therm: 2000000
     overrelax_rate: 10
     N_meas: 2000000
     probe_rate: 400
@@ -46,9 +46,9 @@ parallel_temper:
   load_configs_prefix: "/scratch/antony/pt_collect/save_config/Jpm+_Jpmpm-_h"
   T_args: #otherwise use the following temperature range with N_Ts ranks
     - 0.01
-    - 2.0
+    - 1.0
   N_Ts: 192
-  file_prefix: "Eg_Jpm=0.25_Jpmpm=0.25"
+  file_prefix: "L6_nocubic_real"
   results_dir: "/scratch/antony/pt_out" #temporary storage
-  save_dir: "/scratch/antony/pt_collect/quadrupolar_susceptibility" #final storage
+  save_dir: "/scratch/antony/pt_collect/elastic_correction" #final storage
   save_configs: true #save final spin configuration at each temperature

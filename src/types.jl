@@ -54,6 +54,7 @@ mutable struct Observables
     local_spin::Matrix{ErrorPropagator{Float64,32}} # 3 components of average spin on 4 sublattices in local frame
     energy_spin_covariance::Matrix{ErrorPropagator{Float64,32}} # covariance between energy and local spin components, used for calculating dS/dT
     energy_quadrupolar_covariance::Vector{ErrorPropagator{Float64,32}} # covariance between energy and quadrupolar order parameters, used for calculating dQ/dT  
+    elastic_correction_covariance::Vector{ErrorPropagator{Float64,32}} # generalized susceptibilities appearing in first order corrections to elastic constants
     output::Dict{String, Union{Float64, AbstractArray{Float64}}} # dictionary to store final results with error bars for output
     Observables() = new(ErrorPropagator(Float64, N_args=2), 
                         [ErrorPropagator(Float64, N_args=3) for i=1:3],                    
@@ -61,6 +62,7 @@ mutable struct Observables
                         [ErrorPropagator(Float64,N_args=2) for i=1:3,j=1:4], 
                         [ErrorPropagator(Float64,N_args=3) for i=1:3,j=1:4],
                         [ErrorPropagator(Float64,N_args=3) for i=1:length(Q_SPECS)],
+                        [ErrorPropagator(Float64,N_args=2) for i=1:length(ELASTIC_CORRECTION_SPECS)],
                         Dict{String, Union{Float64, AbstractArray{Float64}}}())
 end
 
